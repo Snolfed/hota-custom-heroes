@@ -1,0 +1,25 @@
+HotA Custom Heroes - installation
+=================================
+
+Works ONLY with Heroes of Might and Magic III: Horn of the Abyss 1.8.0 (with HD Mod).
+For local games only (hot-seat / single player) - see README for details.
+
+1. Make a COPY of your whole game folder and install the mod into the copy.
+   (Also turn off HotA auto-update in that copy: HotA_Setup.ini -> AutoUpdate=false)
+
+2. In the game folder copy, rename the original SMACKW32.DLL to smackw32_org.dll
+   (keep it - the mod's SMACKW32.DLL passes everything through to it).
+
+3. Copy from this zip into the game folder:
+     SMACKW32.DLL
+     WlasniBohaterowie\   (whole folder)
+
+4. Start the game once (start a new game) so the mod writes the hero and specialty
+   lists, then close it.
+
+5. Run WlasniBohaterowie\Kreator.exe, set up your heroes, click Save, start the game.
+
+Log file: WlasniBohaterowie\WlasniBohaterowie.log
+
+Uninstall: delete SMACKW32.DLL and the WlasniBohaterowie folder,
+then rename smackw32_org.dll back to SMACKW32.DLL.

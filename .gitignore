@@ -1,0 +1,11 @@
+dist/
+*.obj
+*.exp
+*.lib
+*.dll
+*.DLL
+*.exe
+*.log
+lista_bohaterow.txt
+lista_specjalizacji.txt
+*.bak

@@ -14,8 +14,10 @@ For local games only (hot-seat / single player) - see README for details.
      SMACKW32.DLL
      WlasniBohaterowie\   (whole folder)
 
-4. Start the game once (start a new game) so the mod writes the hero and specialty
-   lists, then close it.
+4. Start the game once and start a NEW game, so the mod writes the hero, specialty
+   and portrait data the editor uses, then close it.
+   (Updating from 1.0.0: keep your WlasniBohaterowie\bohaterowie.ini - don't
+   overwrite it with the example one from this zip.)
 
 5. Run WlasniBohaterowie\Kreator.exe, set up your heroes, click Save, start the game.
 

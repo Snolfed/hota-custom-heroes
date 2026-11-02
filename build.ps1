@@ -19,11 +19,11 @@ function Invoke-Cl($dir, $clArgs) {
 }
 
 Copy-Item "$root\src\WlasniBohaterowie\*", "$root\src\proxy\*" $out
-Invoke-Cl $out "WlasniBohaterowie.cpp /Fe:WlasniBohaterowie.dll user32.lib kernel32.lib"
+Invoke-Cl $out "WlasniBohaterowie.cpp /Fe:WlasniBohaterowie.dll user32.lib kernel32.lib psapi.lib"
 Invoke-Cl $out "smackw32_proxy.cpp /Fe:SMACKW32.DLL kernel32.lib"
 
 $csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe"
-& $csc /nologo /codepage:65001 /target:winexe /out:"$out\Kreator.exe" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Core.dll "$root\src\Kreator\Kreator.cs"
+& $csc /nologo /codepage:65001 /target:winexe /out:"$out\Kreator.exe" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Core.dll /r:System.dll "$root\src\Kreator\Kreator.cs"
 if ($LASTEXITCODE -ne 0) { throw "csc failed" }
 
 Copy-Item "$out\SMACKW32.DLL" $pkg

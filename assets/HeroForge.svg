@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="256" height="256" viewBox="0 0 256 256" role="img" aria-labelledby="title">
+  <title id="title">HeroForge</title>
+  <rect x="10" y="10" width="236" height="236" rx="48" fill="#201D1A"/>
+  <g fill="#E0BC82">
+    <polygon points="132,46 148,62 132,78 116,62"/>
+    <polygon points="43,94 213,94 213,112 190,134 158,134 158,151 179,169 193,169 193,190 66,190 66,169 82,169 103,151 103,134 85,134 62,121"/>
+  </g>
+</svg>

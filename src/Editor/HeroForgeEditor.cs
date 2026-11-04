@@ -430,6 +430,7 @@ namespace HeroForge
             dir = AppDomain.CurrentDomain.BaseDirectory;
             iniPath = Path.Combine(dir, "heroes.ini");
             Text = "HeroForge - Hero Editor for HotA";
+            Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             Font = new Font("Segoe UI", 9f);
             ClientSize = new Size(910, 560);
             MinimumSize = new Size(926, 599);

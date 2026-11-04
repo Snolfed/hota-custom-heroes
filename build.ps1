@@ -23,7 +23,7 @@ Invoke-Cl $out "HeroForge.cpp /Fe:HeroForge.dll user32.lib kernel32.lib psapi.li
 Invoke-Cl $out "smackw32_proxy.cpp /Fe:SMACKW32.DLL kernel32.lib"
 
 $csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe"
-& $csc /nologo /codepage:65001 /target:winexe /out:"$out\HeroForge.exe" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Core.dll /r:System.dll "$root\src\Editor\HeroForgeEditor.cs"
+& $csc /nologo /codepage:65001 /target:winexe /win32icon:"$root\assets\HeroForge.ico" /out:"$out\HeroForge.exe" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Core.dll /r:System.dll "$root\src\Editor\HeroForgeEditor.cs"
 if ($LASTEXITCODE -ne 0) { throw "csc failed" }
 
 Copy-Item "$out\SMACKW32.DLL" $pkg

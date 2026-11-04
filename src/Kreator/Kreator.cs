@@ -18,6 +18,8 @@ namespace Kreator
         public int Bonus;
         public List<KeyValuePair<int, int>> Skills = new List<KeyValuePair<int, int>>(); // skill id, level 1..3
         public HashSet<int> Spells = new HashSet<int>();
+        public bool SpellsSet;       // "czary" given: Spells replace the hero's own starting spell (empty = none)
+        public List<int[]> Army;     // starting army (creature, min, max), null = game default
         public int[] Stats;          // null = keep game defaults
         public int SpecMode;         // SpecOwn, SpecNone or SpecCopy
         public int SpecFrom = -1;    // hero id to copy from (SpecCopy)
@@ -25,7 +27,14 @@ namespace Kreator
         public string SpecName = "";
         public string SpecDesc = "";
 
-        public const int SpecOwn = 0, SpecNone = 1, SpecCopy = 2;
+        public const int SpecOwn = 0, SpecNone = 1, SpecCopy = 2, SpecBuilt = 3;
+        // SpecBuilt: game specialty type (as in the mod): 0 skill, 1 creature growing with level,
+        // 2 resource, 3 spell, 4 creature fixed bonus, 5 speed for all.
+        public int BuildKind = 4;
+        public int Creature = -1;    // kinds 1 and 4: creature id (with its upgrade)
+        public int[] CreatureBonus = new int[4]; // kind 4: attack, defense, damage, speed
+        public int BuildSpell = -1, BuildSkill = -1, BuildResource = -1;
+        public int StartBook = -1;   // spell book at start: -1 game default, 1 yes, 0 no
 
         // "ikona" key: absent = automatic, "wlasna" = own, skill key = skill icon, number = that hero's icon.
         public int IconMode;
@@ -215,6 +224,16 @@ namespace Kreator
         readonly Dictionary<int, int> heroTowns = new Dictionary<int, int>();         // hero id -> town id
         readonly Dictionary<int, int[]> heroStats = new Dictionary<int, int[]>();     // hero id -> default A/D/P/K
         readonly Dictionary<int, string> heroPortraits = new Dictionary<int, string>(); // hero id -> large portrait .pcx
+        readonly Dictionary<int, int> heroSpell = new Dictionary<int, int>();         // hero id -> default starting spell (-1 none)
+        readonly Dictionary<int, List<int[]>> heroArmy = new Dictionary<int, List<int[]>>(); // hero id -> default army (creature, low, high)
+        readonly List<SpecItem> armyItems = new List<SpecItem>();                     // every creature, one by one
+        readonly Dictionary<int, string> creatureNames = new Dictionary<int, string>();
+        const int ArmyRows = 7;
+        CheckBox chkArmy;
+        ComboBox[] cboArmy = new ComboBox[ArmyRows];
+        NumericUpDown[] numArmyMin = new NumericUpDown[ArmyRows], numArmyMax = new NumericUpDown[ArmyRows];
+        int[] armyPick = new int[ArmyRows];
+        Label lblArmyDefault, lblSpellDefault;
         PictureBox picPortrait;
         Label portraitNote;
         List<SpecItem> specItems;
@@ -245,11 +264,13 @@ namespace Kreator
         }
 
         // Shows the full list again and selects the item for hero `id` (or nothing).
-        void SelectSearchable(ComboBox box, int id)
+        void SelectSearchable(ComboBox box, int id) { SelectSearchable(box, id, specItems); }
+
+        void SelectSearchable(ComboBox box, int id, List<SpecItem> all)
         {
             box.Items.Clear();
-            box.Items.AddRange(specItems.ToArray());
-            box.SelectedIndex = specItems.FindIndex(i => i.Id == id);
+            box.Items.AddRange(all.ToArray());
+            box.SelectedIndex = all.FindIndex(i => i.Id == id);
             if (box.SelectedIndex < 0) box.Text = "";
         }
 
@@ -370,7 +391,28 @@ namespace Kreator
         ListBox lstEntries;
         ComboBox cboHero, cboTown;
         CheckBox chkSpec, chkEarth, chkFire, chkWater, chkAir;
-        RadioButton rbSpecOwn, rbSpecNone, rbSpecCopy;
+        RadioButton rbSpecOwn, rbSpecNone, rbSpecCopy, rbSpecCreature;
+        ComboBox cboCreature, cboKind, cboBuildSpell, cboBuildSkill, cboBuildRes, cboBook;
+        Label lblKindInfo;
+        Label[] lblCreature = new Label[4];
+
+        // "New specialty" kinds in display order: game type, label, what it does.
+        static readonly int[] KindTypes = { 4, 1, 3, 0, 2, 5 };
+        static readonly string[] KindLabels = {
+            "Creature - fixed bonus", "Creature - grows with level", "Spell - stronger with level",
+            "Secondary skill - bonus per level", "Resource per day", "Speed for all creatures" };
+        static readonly string[] KindInfo = {
+            "",
+            "Like Creyle: +1 Speed, and Attack and Defense grow with the hero's level (game formula).",
+            "Like Solmyr: the spell's effect grows with the hero's level.",
+            "Like Adrienne: +5% per level to the skill's effect, for skills the game supports (e.g. Archery, Offense, Armorer, Estates).",
+            "+1 of the resource every day (Gold: +350).",
+            "Like Sir Mullich: +2 Speed for all creatures in the hero's army." };
+        static readonly string[] ResourceNames = { "Wood", "Mercury", "Ore", "Sulfur", "Crystal", "Gems", "Gold" };
+        static readonly string[] KindKeys = { "umiejetnosc", "stwor_poziom", "surowiec", "czar", "stwor", "szybkosc" }; // by game type
+        NumericUpDown[] numCreature = new NumericUpDown[4];   // attack, defense, damage, speed
+        List<SpecItem> creatureItems = new List<SpecItem>();
+        readonly Dictionary<int, int> upgradeToBase = new Dictionary<int, int>();
         ComboBox cboSpecFrom;
         TextBox txtSpecName, txtSpecDesc, txtName;
         ComboBox cboIconMode, cboIconSkill, cboIconHero;
@@ -389,8 +431,8 @@ namespace Kreator
             iniPath = Path.Combine(dir, "bohaterowie.ini");
             Text = "Hero Creator - Custom Heroes (HotA)";
             Font = new Font("Segoe UI", 9f);
-            ClientSize = new Size(900, 876);
-            MinimumSize = new Size(916, 915);
+            ClientSize = new Size(910, 560);
+            MinimumSize = new Size(926, 599);
             StartPosition = FormStartPosition.CenterScreen;
 
             LoadHeroNames();
@@ -464,8 +506,18 @@ namespace Kreator
                 });
             y += 64; // room for the portrait buttons
 
+            // Two tabs below the hero: the specialty, and skills/spells/stats.
+            var tabs = new TabControl { Location = new Point(10, y), Size = new Size(652, 412) };
+            var tabSpec = new TabPage("Specialty");
+            var tabHero = new TabPage("Skills && Spells");
+            var tabArmy = new TabPage("Army");
+            tabs.TabPages.Add(tabSpec);
+            tabs.TabPages.Add(tabHero);
+            tabs.TabPages.Add(tabArmy);
+            editor.Controls.Add(tabs);
+
             // Specialty
-            var grpSpec = new GroupBox { Text = "Specialty", Location = new Point(10, y), Size = new Size(630, 250) };
+            var grpSpec = new GroupBox { Text = "Specialty", Location = new Point(6, 6), Size = new Size(630, 306) };
             rbSpecOwn = new RadioButton { Text = "Hero's original specialty", Location = new Point(12, 22), AutoSize = true };
             lblOwnSpec = new Label { Location = new Point(250, 24), Size = new Size(370, 18), ForeColor = Color.DimGray };
             rbSpecCopy = new RadioButton { Text = "Same specialty as:", Location = new Point(12, 46), AutoSize = true };
@@ -474,45 +526,74 @@ namespace Kreator
                 .Select(kv => new SpecItem(kv.Key, kv.Value, specTexts.ContainsKey(kv.Key) ? specTexts[kv.Key] : "")).ToList();
             MakeSearchable(cboSpecFrom, specItems);
             rbSpecNone = new RadioButton { Text = "No specialty (only the bonus below)", Location = new Point(12, 70), AutoSize = true };
-            chkSpec = new CheckBox { Text = "Spell damage bonus for school:", Location = new Point(12, 100), AutoSize = true };
-            chkEarth = new CheckBox { Text = "Earth", Location = new Point(250, 100), AutoSize = true };
-            chkFire = new CheckBox { Text = "Fire", Location = new Point(330, 100), AutoSize = true };
-            chkWater = new CheckBox { Text = "Water", Location = new Point(400, 100), AutoSize = true };
-            chkAir = new CheckBox { Text = "Air", Location = new Point(470, 100), AutoSize = true };
-            grpSpec.Controls.Add(new Label { Text = "Bonus (%):", Location = new Point(30, 127), AutoSize = true });
-            numBonus = new NumericUpDown { Location = new Point(110, 124), Width = 70, Minimum = 1, Maximum = 500, Value = 50 };
-            grpSpec.Controls.Add(new Label { Text = "In-game name:", Location = new Point(12, 158), AutoSize = true });
-            txtSpecName = new TextBox { Location = new Point(108, 155), Width = 140, MaxLength = 60 };
-            grpSpec.Controls.Add(new Label { Text = "Description:", Location = new Point(258, 158), AutoSize = true });
-            txtSpecDesc = new TextBox { Location = new Point(335, 155), Width = 285, MaxLength = 250 };
-            grpSpec.Controls.Add(new Label { Text = "Icon:", Location = new Point(12, 188), AutoSize = true });
-            cboIconMode = new ComboBox { Location = new Point(108, 185), Width = 140, DropDownStyle = ComboBoxStyle.DropDownList };
+            // New specialty: a kind, then what it applies to (one of the four lists below,
+            // all at the same place), then the creature numbers or a line on what it does.
+            rbSpecCreature = new RadioButton { Text = "New specialty:", Location = new Point(12, 96), AutoSize = true };
+            cboKind = new ComboBox { Location = new Point(160, 94), Width = 210, DropDownStyle = ComboBoxStyle.DropDownList };
+            cboKind.Items.AddRange(KindLabels);
+            cboKind.SelectedIndex = 0;
+            cboCreature = new ComboBox { Location = new Point(378, 94), Width = 242, MaxDropDownItems = 20 };
+            MakeSearchable(cboCreature, creatureItems);
+            cboBuildSpell = new ComboBox { Location = new Point(378, 94), Width = 242, DropDownStyle = ComboBoxStyle.DropDownList, MaxDropDownItems = 20 };
+            for (int i = 0; i < Data.SpellNames.Length; i++)
+                if (Data.SpellNames[i] != null) cboBuildSpell.Items.Add(new SpellItem(i));
+            cboBuildSkill = new ComboBox { Location = new Point(378, 94), Width = 242, DropDownStyle = ComboBoxStyle.DropDownList, MaxDropDownItems = 20 };
+            cboBuildSkill.Items.AddRange(Data.SkillNames);
+            cboBuildRes = new ComboBox { Location = new Point(378, 94), Width = 242, DropDownStyle = ComboBoxStyle.DropDownList };
+            cboBuildRes.Items.AddRange(ResourceNames);
+            string[] crLabels = { "Attack", "Defense", "Damage", "Speed" };
+            for (int i = 0; i < 4; i++)
+            {
+                lblCreature[i] = new Label { Text = crLabels[i] + ":", Location = new Point(30 + i * 130, 127), AutoSize = true };
+                grpSpec.Controls.Add(lblCreature[i]);
+                numCreature[i] = new NumericUpDown { Location = new Point(88 + i * 130, 124), Width = 50, Minimum = -20, Maximum = 99 };
+                numCreature[i].ValueChanged += (s, e) => { if (!loading) rbSpecCreature.Checked = true; OnEdit(); };
+                grpSpec.Controls.Add(numCreature[i]);
+            }
+            lblKindInfo = new Label { Location = new Point(30, 122), Size = new Size(590, 30), ForeColor = Color.DimGray };
+            grpSpec.Controls.Add(lblKindInfo);
+            cboKind.SelectedIndexChanged += (s, e) => { UpdateKindControls(); if (!loading) rbSpecCreature.Checked = true; OnEdit(); };
+            foreach (var box in new[] { cboBuildSpell, cboBuildSkill, cboBuildRes })
+                box.SelectedIndexChanged += (s, e) => { if (!loading) rbSpecCreature.Checked = true; OnEdit(); };
+            chkSpec = new CheckBox { Text = "Spell damage bonus for school:", Location = new Point(12, 156), AutoSize = true };
+            chkEarth = new CheckBox { Text = "Earth", Location = new Point(250, 156), AutoSize = true };
+            chkFire = new CheckBox { Text = "Fire", Location = new Point(330, 156), AutoSize = true };
+            chkWater = new CheckBox { Text = "Water", Location = new Point(400, 156), AutoSize = true };
+            chkAir = new CheckBox { Text = "Air", Location = new Point(470, 156), AutoSize = true };
+            grpSpec.Controls.Add(new Label { Text = "Bonus (%):", Location = new Point(30, 183), AutoSize = true });
+            numBonus = new NumericUpDown { Location = new Point(110, 180), Width = 70, Minimum = 1, Maximum = 500, Value = 50 };
+            grpSpec.Controls.Add(new Label { Text = "In-game name:", Location = new Point(12, 214), AutoSize = true });
+            txtSpecName = new TextBox { Location = new Point(108, 211), Width = 140, MaxLength = 60 };
+            grpSpec.Controls.Add(new Label { Text = "Description:", Location = new Point(258, 214), AutoSize = true });
+            txtSpecDesc = new TextBox { Location = new Point(335, 211), Width = 285, MaxLength = 250 };
+            grpSpec.Controls.Add(new Label { Text = "Icon:", Location = new Point(12, 244), AutoSize = true });
+            cboIconMode = new ComboBox { Location = new Point(108, 241), Width = 140, DropDownStyle = ComboBoxStyle.DropDownList };
             cboIconMode.Items.AddRange(new object[] { "Automatic", "Hero's own", "Skill icon:", "Same as hero:" });
-            cboIconSkill = new ComboBox { Location = new Point(258, 185), Width = 200, DropDownStyle = ComboBoxStyle.DropDownList };
+            cboIconSkill = new ComboBox { Location = new Point(258, 241), Width = 200, DropDownStyle = ComboBoxStyle.DropDownList };
             cboIconSkill.Items.AddRange(Data.SkillNames);
-            cboIconHero = new ComboBox { Location = new Point(258, 185), Width = 362, MaxDropDownItems = 20 };
+            cboIconHero = new ComboBox { Location = new Point(258, 241), Width = 362, MaxDropDownItems = 20 };
             MakeSearchable(cboIconHero, specItems);
             grpSpec.Controls.Add(new Label
             {
-                Text = "Name and description are optional (empty = automatic). Use plain English letters. Automatic icon: copied hero's icon, or the magic school orb.",
-                Location = new Point(12, 212), Size = new Size(610, 32), ForeColor = Color.DimGray
+                Text = "Name and description are optional (empty = automatic). Use plain English letters. Automatic icon: a hero with the same specialty, else the creature, skill or magic school.",
+                Location = new Point(12, 268), Size = new Size(610, 32), ForeColor = Color.DimGray
             });
-            foreach (var c in new Control[] { rbSpecOwn, lblOwnSpec, rbSpecCopy, cboSpecFrom, rbSpecNone, chkSpec, chkEarth, chkFire, chkWater, chkAir, numBonus, txtSpecName, txtSpecDesc, cboIconMode, cboIconSkill, cboIconHero })
+            foreach (var c in new Control[] { rbSpecOwn, lblOwnSpec, rbSpecCopy, cboSpecFrom, rbSpecNone, rbSpecCreature, cboKind, cboCreature, cboBuildSpell, cboBuildSkill, cboBuildRes, chkSpec, chkEarth, chkFire, chkWater, chkAir, numBonus, txtSpecName, txtSpecDesc, cboIconMode, cboIconSkill, cboIconHero })
                 grpSpec.Controls.Add(c);
             cboIconMode.SelectedIndexChanged += (s, e) => { UpdateIconControls(); OnEdit(); };
             cboIconSkill.SelectedIndexChanged += (s, e) => OnEdit();
             cboIconHero.SelectedIndexChanged += (s, e) => OnEdit();
             foreach (var c in new CheckBox[] { chkSpec, chkEarth, chkFire, chkWater, chkAir }) c.CheckedChanged += (s, e) => OnEdit();
-            foreach (var r in new RadioButton[] { rbSpecOwn, rbSpecCopy, rbSpecNone }) r.CheckedChanged += (s, e) => { if (((RadioButton)s).Checked) OnEdit(); };
+            foreach (var r in new RadioButton[] { rbSpecOwn, rbSpecCopy, rbSpecNone, rbSpecCreature }) r.CheckedChanged += (s, e) => { if (((RadioButton)s).Checked) OnEdit(); };
+            cboCreature.SelectedIndexChanged += (s, e) => { if (!loading && cboCreature.SelectedIndex >= 0) rbSpecCreature.Checked = true; OnEdit(); };
             cboSpecFrom.SelectedIndexChanged += (s, e) => { if (!loading && cboSpecFrom.SelectedIndex >= 0) rbSpecCopy.Checked = true; OnEdit(); };
             numBonus.ValueChanged += (s, e) => OnEdit();
             txtSpecName.TextChanged += (s, e) => OnEdit();
             txtSpecDesc.TextChanged += (s, e) => OnEdit();
-            editor.Controls.Add(grpSpec);
-            y += 260;
+            tabSpec.Controls.Add(grpSpec);
 
             // Skills
-            var grpSkills = new GroupBox { Text = "Starting skills (at least this level, max 8)", Location = new Point(10, y), Size = new Size(320, 270) };
+            var grpSkills = new GroupBox { Text = "Starting skills (at least this level, max 8)", Location = new Point(6, 6), Size = new Size(320, 270) };
             for (int i = 0; i < SkillRows; i++)
             {
                 cboSkill[i] = new ComboBox { Location = new Point(12, 24 + i * 30), Width = 160, DropDownStyle = ComboBoxStyle.DropDownList };
@@ -527,10 +608,10 @@ namespace Kreator
                 grpSkills.Controls.Add(cboSkill[i]);
                 grpSkills.Controls.Add(cboLevel[i]);
             }
-            editor.Controls.Add(grpSkills);
+            tabHero.Controls.Add(grpSkills);
 
             // Stats
-            var grpStats = new GroupBox { Text = "Starting stats", Location = new Point(10, y + 280), Size = new Size(320, 90) };
+            var grpStats = new GroupBox { Text = "Starting stats", Location = new Point(6, 286), Size = new Size(320, 90) };
             chkStats = new CheckBox { Text = "Custom stats (otherwise the hero's defaults)", Location = new Point(12, 22), AutoSize = true };
             chkStats.CheckedChanged += (s, e) => { foreach (var n in numStats) n.Enabled = chkStats.Checked; OnEdit(); };
             grpStats.Controls.Add(chkStats);
@@ -542,22 +623,65 @@ namespace Kreator
                 numStats[i].ValueChanged += (s, e) => OnEdit();
                 grpStats.Controls.Add(numStats[i]);
             }
-            editor.Controls.Add(grpStats);
+            tabHero.Controls.Add(grpStats);
 
             // Spells
-            var grpSpells = new GroupBox { Text = "Starting spells (spell book)", Location = new Point(340, y), Size = new Size(300, 370) };
-            lstSpells = new CheckedListBox { Location = new Point(10, 22), Size = new Size(280, 338), CheckOnClick = true, IntegralHeight = false };
+            var grpSpells = new GroupBox { Text = "Starting spells (spell book)", Location = new Point(336, 6), Size = new Size(300, 370) };
+            grpSpells.Controls.Add(new Label { Text = "Spell book:", Location = new Point(10, 25), AutoSize = true });
+            cboBook = new ComboBox { Location = new Point(80, 21), Width = 210, DropDownStyle = ComboBoxStyle.DropDownList };
+            cboBook.Items.AddRange(new object[] { "Game default (spells below add one)", "Yes, at start", "No spell book" });
+            cboBook.SelectedIndex = 0;
+            cboBook.SelectedIndexChanged += (s, e) => OnEdit();
+            grpSpells.Controls.Add(cboBook);
+            lstSpells = new CheckedListBox { Location = new Point(10, 50), Size = new Size(280, 278), CheckOnClick = true, IntegralHeight = false };
+            lblSpellDefault = new Label { Location = new Point(10, 330), Size = new Size(282, 34), ForeColor = Color.DimGray };
+            grpSpells.Controls.Add(lblSpellDefault);
             for (int i = 0; i < Data.SpellNames.Length; i++)
                 if (Data.SpellNames[i] != null) lstSpells.Items.Add(new SpellItem(i));
             // ItemCheck fires before the check state changes, so read it after the event.
             lstSpells.ItemCheck += (s, e) => { if (!loading && IsHandleCreated) BeginInvoke((Action)OnEdit); };
             grpSpells.Controls.Add(lstSpells);
-            editor.Controls.Add(grpSpells);
+            tabHero.Controls.Add(grpSpells);
+
+            // Army
+            var grpArmy = new GroupBox { Text = "Starting army", Location = new Point(6, 6), Size = new Size(630, 370) };
+            chkArmy = new CheckBox { Text = "Custom starting army (otherwise the hero's default)", Location = new Point(12, 22), AutoSize = true };
+            chkArmy.CheckedChanged += (s, e) => { UpdateArmyEnabled(); OnEdit(); };
+            grpArmy.Controls.Add(chkArmy);
+            grpArmy.Controls.Add(new Label { Text = "Creature", Location = new Point(70, 50), AutoSize = true, ForeColor = Color.DimGray });
+            grpArmy.Controls.Add(new Label { Text = "Count (from - to, random in between)", Location = new Point(420, 50), AutoSize = true, ForeColor = Color.DimGray });
+            for (int i = 0; i < ArmyRows; i++)
+            {
+                int row = i;
+                int ry = 70 + i * 34;
+                grpArmy.Controls.Add(new Label { Text = "Slot " + (i + 1) + ":", Location = new Point(12, ry + 3), AutoSize = true });
+                cboArmy[i] = new ComboBox { Location = new Point(70, ry), Width = 340, MaxDropDownItems = 20 };
+                MakeSearchable(cboArmy[i], armyItems);
+                cboArmy[i].SelectedIndexChanged += (s, e) =>
+                {
+                    if (cboArmy[row].SelectedIndex >= 0) armyPick[row] = ((SpecItem)cboArmy[row].SelectedItem).Id;
+                    OnEdit();
+                };
+                cboArmy[i].TextChanged += (s, e) => { if (cboArmy[row].Text.Trim().Length == 0) { armyPick[row] = -1; OnEdit(); } };
+                numArmyMin[i] = new NumericUpDown { Location = new Point(420, ry), Width = 70, Minimum = 1, Maximum = 9999, Value = 1 };
+                grpArmy.Controls.Add(new Label { Text = "-", Location = new Point(496, ry + 3), AutoSize = true });
+                numArmyMax[i] = new NumericUpDown { Location = new Point(512, ry), Width = 70, Minimum = 1, Maximum = 9999, Value = 1 };
+                numArmyMin[i].ValueChanged += (s, e) => OnEdit();
+                numArmyMax[i].ValueChanged += (s, e) => OnEdit();
+                grpArmy.Controls.Add(cboArmy[i]);
+                grpArmy.Controls.Add(numArmyMin[i]);
+                grpArmy.Controls.Add(numArmyMax[i]);
+                armyPick[i] = -1;
+            }
+            lblArmyDefault = new Label { Location = new Point(12, 312), Size = new Size(606, 50), ForeColor = Color.DimGray };
+            grpArmy.Controls.Add(lblArmyDefault);
+            tabArmy.Controls.Add(grpArmy);
+            UpdateArmyEnabled();
 
             var hint = new Label
             {
                 Text = "Changes take effect after saving and restarting the game; skills, spells and stats apply in a NEW game.",
-                Location = new Point(10, y + 380), AutoSize = true, ForeColor = Color.DimGray
+                Location = new Point(10, y + 418), AutoSize = true, ForeColor = Color.DimGray
             };
             editor.Controls.Add(hint);
 
@@ -660,6 +784,19 @@ namespace Kreator
             rbSpecOwn.Checked = e.SpecMode == HeroEntry.SpecOwn;
             rbSpecNone.Checked = e.SpecMode == HeroEntry.SpecNone;
             rbSpecCopy.Checked = e.SpecMode == HeroEntry.SpecCopy;
+            rbSpecCreature.Checked = e.SpecMode == HeroEntry.SpecBuilt;
+            cboKind.SelectedIndex = Math.Max(0, Array.IndexOf(KindTypes, e.BuildKind));
+            int baseCreature;
+            if (upgradeToBase.TryGetValue(e.Creature, out baseCreature)) e.Creature = baseCreature;
+            SelectSearchable(cboCreature, e.Creature, creatureItems);
+            for (int i = 0; i < 4; i++) numCreature[i].Value = Math.Max(-20, Math.Min(99, e.CreatureBonus[i]));
+            cboBuildSpell.SelectedIndex = -1;
+            for (int i = 0; i < cboBuildSpell.Items.Count; i++)
+                if (((SpellItem)cboBuildSpell.Items[i]).Id == e.BuildSpell) cboBuildSpell.SelectedIndex = i;
+            cboBuildSkill.SelectedIndex = e.BuildSkill >= 0 && e.BuildSkill < Data.SkillNames.Length ? e.BuildSkill : -1;
+            cboBuildRes.SelectedIndex = e.BuildResource >= 0 && e.BuildResource < ResourceNames.Length ? e.BuildResource : -1;
+            cboBook.SelectedIndex = e.StartBook < 0 ? 0 : e.StartBook == 1 ? 1 : 2;
+            UpdateKindControls();
             SelectSearchable(cboSpecFrom, e.SpecMode == HeroEntry.SpecCopy ? e.SpecFrom : -1);
             UpdatePortrait(e.Id);
             txtSpecName.Text = e.SpecName;
@@ -682,8 +819,12 @@ namespace Kreator
                 cboSkill[i].SelectedIndex = has ? e.Skills[i].Key + 1 : 0;
                 cboLevel[i].SelectedIndex = has ? e.Skills[i].Value - 1 : 2;
             }
-            for (int i = 0; i < lstSpells.Items.Count; i++)
-                lstSpells.SetItemChecked(i, e.Spells.Contains(((SpellItem)lstSpells.Items[i]).Id));
+            ShowSpells(e.SpellsSet ? e.Spells : DefaultSpells(e.Id));
+            UpdateSpellDefaultLabel(e.Id);
+            chkArmy.Checked = e.Army != null;
+            ShowArmy(e.Army ?? DefaultArmy(e.Id));
+            UpdateArmyEnabled();
+            UpdateArmyDefaultLabel(e.Id);
             // Without custom stats the boxes show the hero's defaults (read only).
             chkStats.Checked = e.Stats != null;
             for (int i = 0; i < 4; i++) numStats[i].Enabled = e.Stats != null;
@@ -704,9 +845,22 @@ namespace Kreator
                 UpdatePortrait(e.Id);
                 loading = true;
                 ShowStats(DefaultStats(e.Id));
+                // Spells and army not customised yet follow the new hero's defaults.
+                if (!e.SpellsSet) ShowSpells(DefaultSpells(e.Id));
+                if (e.Army == null) ShowArmy(DefaultArmy(e.Id));
                 loading = false;
+                UpdateSpellDefaultLabel(e.Id);
+                UpdateArmyDefaultLabel(e.Id);
             }
-            e.SpecMode = rbSpecCopy.Checked ? HeroEntry.SpecCopy : rbSpecNone.Checked ? HeroEntry.SpecNone : HeroEntry.SpecOwn;
+            e.SpecMode = rbSpecCopy.Checked ? HeroEntry.SpecCopy : rbSpecNone.Checked ? HeroEntry.SpecNone :
+                         rbSpecCreature.Checked ? HeroEntry.SpecBuilt : HeroEntry.SpecOwn;
+            e.BuildKind = SelectedKind;
+            if (cboCreature.SelectedIndex >= 0) e.Creature = ((SpecItem)cboCreature.SelectedItem).Id;
+            for (int i = 0; i < 4; i++) e.CreatureBonus[i] = (int)numCreature[i].Value;
+            if (cboBuildSpell.SelectedIndex >= 0) e.BuildSpell = ((SpellItem)cboBuildSpell.SelectedItem).Id;
+            if (cboBuildSkill.SelectedIndex >= 0) e.BuildSkill = cboBuildSkill.SelectedIndex;
+            if (cboBuildRes.SelectedIndex >= 0) e.BuildResource = cboBuildRes.SelectedIndex;
+            e.StartBook = cboBook.SelectedIndex <= 0 ? -1 : cboBook.SelectedIndex == 1 ? 1 : 0;
             // While a search is typed nothing is selected; keep the last picked hero.
             if (cboSpecFrom.SelectedIndex >= 0) e.SpecFrom = ((SpecItem)cboSpecFrom.SelectedItem).Id;
             e.SpecName = txtSpecName.Text;
@@ -725,8 +879,25 @@ namespace Kreator
                 if (skill >= 0 && !e.Skills.Any(k => k.Key == skill))
                     e.Skills.Add(new KeyValuePair<int, int>(skill, cboLevel[i].SelectedIndex + 1));
             }
-            e.Spells.Clear();
-            foreach (SpellItem item in lstSpells.CheckedItems) e.Spells.Add(item.Id);
+            // Spells: the hero's own starting spell is shown checked; anything else than
+            // exactly that is a custom choice (nothing checked = no starting spell).
+            var checkedSpells = new HashSet<int>();
+            foreach (SpellItem item in lstSpells.CheckedItems) checkedSpells.Add(item.Id);
+            bool wasNone = e.SpellsSet && e.Spells.Count == 0;
+            if (heroSpell.ContainsKey(e.Id)) e.SpellsSet = !checkedSpells.SetEquals(DefaultSpells(e.Id));
+            else e.SpellsSet = checkedSpells.Count > 0 || wasNone;
+            e.Spells = checkedSpells;
+            if (chkArmy.Checked)
+            {
+                e.Army = new List<int[]>();
+                for (int i = 0; i < ArmyRows; i++)
+                {
+                    if (armyPick[i] < 0) continue;
+                    int lo = (int)numArmyMin[i].Value, hi = (int)numArmyMax[i].Value;
+                    e.Army.Add(new[] { armyPick[i], Math.Min(lo, hi), Math.Max(lo, hi) });
+                }
+            }
+            else e.Army = null;
             e.Stats = chkStats.Checked ? numStats.Select(n => (int)n.Value).ToArray() : null;
 
             int idx = lstEntries.SelectedIndex;
@@ -737,6 +908,92 @@ namespace Kreator
                 lstEntries.Items[idx] = label;
                 loading = false;
             }
+        }
+
+        int SelectedKind { get { return KindTypes[Math.Max(0, cboKind.SelectedIndex)]; } }
+
+        // Show the list and fields that belong to the chosen kind of new specialty.
+        void UpdateKindControls()
+        {
+            int kind = SelectedKind;
+            cboCreature.Visible = kind == 4 || kind == 1;
+            cboBuildSpell.Visible = kind == 3;
+            cboBuildSkill.Visible = kind == 0;
+            cboBuildRes.Visible = kind == 2;
+            for (int i = 0; i < 4; i++) numCreature[i].Visible = lblCreature[i].Visible = kind == 4;
+            lblKindInfo.Visible = kind != 4;
+            lblKindInfo.Text = KindInfo[Math.Max(0, cboKind.SelectedIndex)];
+        }
+
+        HashSet<int> DefaultSpells(int id)
+        {
+            int spell;
+            var set = new HashSet<int>();
+            if (heroSpell.TryGetValue(id, out spell) && spell >= 0) set.Add(spell);
+            return set;
+        }
+
+        void ShowSpells(ICollection<int> spells)
+        {
+            bool wasLoading = loading;
+            loading = true;
+            for (int i = 0; i < lstSpells.Items.Count; i++)
+                lstSpells.SetItemChecked(i, spells.Contains(((SpellItem)lstSpells.Items[i]).Id));
+            loading = wasLoading;
+        }
+
+        void UpdateSpellDefaultLabel(int id)
+        {
+            int spell;
+            if (!heroSpell.TryGetValue(id, out spell))
+                lblSpellDefault.Text = id >= 0 ? "Start the game once with the mod to see this hero's own starting spell here." : "";
+            else if (spell >= 0 && spell < Data.SpellNames.Length && Data.SpellNames[spell] != null)
+                lblSpellDefault.Text = "Own starting spell: " + Data.SpellNames[spell] + " (checked by default). Uncheck it to replace it or start without one.";
+            else
+                lblSpellDefault.Text = "This hero has no starting spell of its own.";
+        }
+
+        List<int[]> DefaultArmy(int id)
+        {
+            List<int[]> army;
+            return heroArmy.TryGetValue(id, out army) ? army : new List<int[]>();
+        }
+
+        void ShowArmy(List<int[]> army)
+        {
+            bool wasLoading = loading;
+            loading = true;
+            for (int i = 0; i < ArmyRows; i++)
+            {
+                bool has = i < army.Count;
+                armyPick[i] = has ? army[i][0] : -1;
+                SelectSearchable(cboArmy[i], armyPick[i], armyItems);
+                numArmyMin[i].Value = has ? Math.Max(1, Math.Min(9999, army[i][1])) : 1;
+                numArmyMax[i].Value = has ? Math.Max(1, Math.Min(9999, army[i][2])) : 1;
+            }
+            loading = wasLoading;
+        }
+
+        void UpdateArmyEnabled()
+        {
+            for (int i = 0; i < ArmyRows; i++)
+                cboArmy[i].Enabled = numArmyMin[i].Enabled = numArmyMax[i].Enabled = chkArmy.Checked;
+        }
+
+        void UpdateArmyDefaultLabel(int id)
+        {
+            var army = DefaultArmy(id);
+            if (army.Count == 0)
+                lblArmyDefault.Text = id >= 0 ? "Start the game once with the mod to see this hero's default army here." : "";
+            else
+                lblArmyDefault.Text = "Default army: " + string.Join(", ", army.Select(a => CreatureLabel(a[0]) + " " + a[1] + "-" + a[2])) +
+                    ". Custom army: every slot you fill, the count picked at random between the two numbers. Applies to heroes in a NEW game (an army set by the map is kept).";
+        }
+
+        string CreatureLabel(int id)
+        {
+            string name;
+            return creatureNames.TryGetValue(id, out name) ? name : "#" + id;
         }
 
         void UpdateIconControls()
@@ -790,6 +1047,82 @@ namespace Kreator
                     var files = parts[6].Split('|').Where(p => p.Trim().Length > 0).ToArray();
                     string large = files.FirstOrDefault(p => p.StartsWith("HPL", StringComparison.OrdinalIgnoreCase)) ?? files.FirstOrDefault();
                     if (large != null) heroPortraits[id] = large;
+                }
+                int spell;
+                if (parts.Length >= 8 && int.TryParse(parts[7], out spell)) heroSpell[id] = spell;
+                if (parts.Length >= 10)
+                {
+                    // "creature:low-high|..." (3 stacks)
+                    var army = new List<int[]>();
+                    foreach (var stack in parts[9].Split('|'))
+                    {
+                        var m = System.Text.RegularExpressions.Regex.Match(stack, @"^\s*(\d+):(\d+)-(\d+)\s*$");
+                        int c, lo, hi;
+                        if (m.Success && int.TryParse(m.Groups[1].Value, out c) && int.TryParse(m.Groups[2].Value, out lo) &&
+                            int.TryParse(m.Groups[3].Value, out hi) && lo > 0)
+                            army.Add(new[] { c, lo, Math.Max(lo, hi) });
+                    }
+                    if (army.Count > 0) heroArmy[id] = army;
+                }
+            }
+
+            // "id;plural name;town;level;upgrade id". A creature and its upgrade share one entry
+            // ("Jotunns / Jotunn Warlords"), keyed by the base creature, as the specialty covers both.
+            string crPath = Path.Combine(dir, "lista_stworow.txt");
+            if (File.Exists(crPath))
+            {
+                var rows = new List<string[]>();
+                foreach (var line in File.ReadAllLines(crPath, Encoding.Default))
+                {
+                    var parts = line.Split(';');
+                    int id;
+                    if (parts.Length >= 4 && int.TryParse(parts[0], out id)) rows.Add(parts);
+                }
+                var names = rows.ToDictionary(p => int.Parse(p[0]), p => p[1].Trim());
+                var townOf = rows.ToDictionary(p => int.Parse(p[0]), p => { int t; int.TryParse(p[2], out t); return t; });
+                var levelOf = rows.ToDictionary(p => int.Parse(p[0]), p => { int l; int.TryParse(p[3], out l); return l; });
+                var baseToUpgrade = new Dictionary<int, int>();
+                foreach (var p in rows)
+                {
+                    int id = int.Parse(p[0]), upgrade = -1;
+                    if (p.Length >= 5) int.TryParse(p[4], out upgrade);
+                    if (upgrade >= 0 && upgrade != id && names.ContainsKey(upgrade)) baseToUpgrade[id] = upgrade;
+                }
+                // Without the game's upgrade data: town creatures come in pairs of the same town and
+                // level in id order (base, upgrade), so pair them within each such run.
+                if (baseToUpgrade.Count == 0)
+                {
+                    var ids = names.Keys.OrderBy(i => i).ToList();
+                    for (int k = 0; k < ids.Count; k++)
+                    {
+                        int id = ids[k];
+                        if (townOf[id] < 0) continue;
+                        int start = k;
+                        while (start > 0 && townOf[ids[start - 1]] == townOf[id] && levelOf[ids[start - 1]] == levelOf[id]) start--;
+                        bool first = (k - start) % 2 == 0;
+                        if (first && k + 1 < ids.Count && townOf[ids[k + 1]] == townOf[id] && levelOf[ids[k + 1]] == levelOf[id])
+                            baseToUpgrade[id] = ids[k + 1];
+                    }
+                }
+                foreach (var kv in baseToUpgrade) upgradeToBase[kv.Value] = kv.Key;
+                // The army list has every creature on its own (a stack is one exact creature).
+                foreach (var p in rows)
+                {
+                    int id = int.Parse(p[0]);
+                    creatureNames[id] = names[id];
+                    string where = townOf[id] >= 0 && townOf[id] < TownNames.Length ? TownNames[townOf[id]] + ", level " + (levelOf[id] + 1) : "neutral";
+                    armyItems.Add(new SpecItem(id, names[id], where));
+                }
+                foreach (var p in rows)
+                {
+                    int id = int.Parse(p[0]), town, level, upgrade;
+                    if (upgradeToBase.ContainsKey(id)) continue; // listed with its base creature
+                    int.TryParse(p[2], out town);
+                    int.TryParse(p[3], out level);
+                    string label = names[id];
+                    if (baseToUpgrade.TryGetValue(id, out upgrade)) label += " / " + names[upgrade];
+                    string where = town >= 0 && town < TownNames.Length ? TownNames[town] + ", level " + (level + 1) : "neutral";
+                    creatureItems.Add(new SpecItem(id, label, where));
                 }
             }
 
@@ -848,7 +1181,19 @@ namespace Kreator
                             if (skill >= 0 && level >= 1 && level <= 3) cur.Skills.Add(new KeyValuePair<int, int>(skill, level));
                         }
                         break;
+                    case "armia":
+                        cur.Army = new List<int[]>();
+                        foreach (var tok in val.Split(',', ';'))
+                        {
+                            var m = System.Text.RegularExpressions.Regex.Match(tok, @"^\s*(\d+)\s*:\s*(\d+)\s*(?:-\s*(\d+))?\s*$");
+                            if (!m.Success) continue;
+                            int c = int.Parse(m.Groups[1].Value), lo = int.Parse(m.Groups[2].Value);
+                            int hi = m.Groups[3].Success ? int.Parse(m.Groups[3].Value) : lo;
+                            if (lo > 0 && cur.Army.Count < ArmyRows) cur.Army.Add(new[] { c, lo, Math.Max(lo, hi) });
+                        }
+                        break;
                     case "czary":
+                        cur.SpellsSet = true;
                         foreach (var tok in val.Split(',', ';', ' '))
                         {
                             string t = tok.Trim().ToLowerInvariant();
@@ -873,6 +1218,19 @@ namespace Kreator
                         else if (Array.IndexOf(Data.SkillKeys, iv) >= 0) { cur.IconMode = HeroEntry.IconSkillMode; cur.IconSkill = Array.IndexOf(Data.SkillKeys, iv); }
                         break;
                     case "imie": cur.Name = val; break;
+                    case "stwor": int.TryParse(val, out cur.Creature); cur.SpecMode = HeroEntry.SpecBuilt; specKey.Add(cur); break;
+                    case "specjalizacja_typ":
+                        int kindType = Array.IndexOf(KindKeys, val.ToLowerInvariant().Replace(" ", ""));
+                        if (kindType >= 0) { cur.BuildKind = kindType; cur.SpecMode = HeroEntry.SpecBuilt; specKey.Add(cur); }
+                        break;
+                    case "spec_czar": int.TryParse(val, out cur.BuildSpell); break;
+                    case "spec_umiejetnosc": cur.BuildSkill = Array.IndexOf(Data.SkillKeys, val.ToLowerInvariant().Replace(" ", "")); break;
+                    case "spec_surowiec": int.TryParse(val, out cur.BuildResource); break;
+                    case "ksiega": cur.StartBook = val.ToLowerInvariant() == "tak" ? 1 : val.ToLowerInvariant() == "nie" ? 0 : -1; break;
+                    case "stwor_atak": int.TryParse(val, out cur.CreatureBonus[0]); break;
+                    case "stwor_obrona": int.TryParse(val, out cur.CreatureBonus[1]); break;
+                    case "stwor_obrazenia": int.TryParse(val, out cur.CreatureBonus[2]); break;
+                    case "stwor_szybkosc": int.TryParse(val, out cur.CreatureBonus[3]); break;
                     case "nazwa_specjalizacji": cur.SpecName = val; break;
                     case "opis_specjalizacji": cur.SpecDesc = val; break;
                     case "statystyki":
@@ -886,6 +1244,18 @@ namespace Kreator
             foreach (var e in entries)
                 if (!specKey.Contains(e))
                     e.SpecMode = e.Schools != 0 && e.Bonus != 0 ? HeroEntry.SpecNone : HeroEntry.SpecOwn;
+        }
+
+        static int BuildParam(HeroEntry e)
+        {
+            switch (e.BuildKind)
+            {
+                case 0: return e.BuildSkill;
+                case 1: case 4: return e.Creature;
+                case 2: return e.BuildResource;
+                case 3: return e.BuildSpell;
+                default: return 0; // speed for all: nothing to pick
+            }
         }
 
         void SaveIni()
@@ -903,6 +1273,12 @@ namespace Kreator
                 MessageBox.Show(this, "Hero " + HeroLabel(dup.Key) + " is on the list more than once.", "Not saved", MessageBoxButtons.OK, MessageBoxIcon.Warning);
                 return;
             }
+            var noParam = entries.FirstOrDefault(e => e.SpecMode == HeroEntry.SpecBuilt && BuildParam(e) < 0);
+            if (noParam != null)
+            {
+                MessageBox.Show(this, HeroLabel(noParam.Id) + ": pick what the new specialty applies to (creature, spell, skill or resource).", "Not saved", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                return;
+            }
             var noSource = entries.FirstOrDefault(e => e.SpecMode == HeroEntry.SpecCopy && e.SpecFrom < 0);
             if (noSource != null)
             {
@@ -915,8 +1291,13 @@ namespace Kreator
             sb.AppendLine("; Written by the Hero Creator (Kreator.exe) - easiest to edit it there.");
             sb.AppendLine(";");
             sb.AppendLine("; Keys: id, imie (new name, max 12), szkola (school: ziemia/ogien/woda/powietrze), bonus (%),");
-            sb.AppendLine(";   umiejetnosci (skill:level 1-3), czary (spell numbers), statystyki (A/D/P/K),");
+            sb.AppendLine(";   umiejetnosci (skill:level 1-3), czary (spell numbers, brak = no starting spell), statystyki (A/D/P/K),");
+            sb.AppendLine(";   armia (starting army: creature:count or creature:min-max, up to 7, comma separated),");
             sb.AppendLine(";   specjalizacja (wlasna = own / brak = none / hero number to copy from),");
+            sb.AppendLine(";   specjalizacja_typ (stwor / stwor_poziom / czar / umiejetnosc / surowiec / szybkosc) with");
+            sb.AppendLine(";   stwor (creature number) + stwor_atak, stwor_obrona, stwor_obrazenia, stwor_szybkosc,");
+            sb.AppendLine(";   spec_czar (spell number), spec_umiejetnosc (skill), spec_surowiec (0-6, 6 = gold),");
+            sb.AppendLine(";   ksiega (tak / nie: spell book at start),");
             sb.AppendLine(";   nazwa_specjalizacji, opis_specjalizacji (in-game specialty name and description),");
             sb.AppendLine(";   ikona (wlasna = own / skill name = skill icon / hero number = that hero's icon; absent = automatic).");
             sb.AppendLine("; Changes take effect after restarting the game (skills/spells/stats: in a NEW game).");
@@ -931,12 +1312,33 @@ namespace Kreator
                 string newName = StripDiacritics(e.Name);
                 if (newName.Length > 12) newName = newName.Substring(0, 12);
                 if (newName.Length > 0) sb.AppendLine("imie = " + newName);
-                if (e.SpecMode == HeroEntry.SpecCopy)
+                if (e.SpecMode == HeroEntry.SpecBuilt)
+                {
+                    sb.AppendLine("specjalizacja_typ = " + KindKeys[e.BuildKind]);
+                    if (e.BuildKind == 4 || e.BuildKind == 1)
+                    {
+                        var cr = creatureItems.FirstOrDefault(i => i.Id == e.Creature);
+                        sb.AppendLine("stwor = " + e.Creature + (cr != null ? "   ; " + cr : ""));
+                    }
+                    if (e.BuildKind == 4)
+                    {
+                        string[] keys = { "stwor_atak", "stwor_obrona", "stwor_obrazenia", "stwor_szybkosc" };
+                        for (int i = 0; i < 4; i++)
+                            if (e.CreatureBonus[i] != 0) sb.AppendLine(keys[i] + " = " + e.CreatureBonus[i]);
+                    }
+                    if (e.BuildKind == 3)
+                        sb.AppendLine("spec_czar = " + e.BuildSpell + "   ; " + Data.SpellNames[e.BuildSpell]);
+                    if (e.BuildKind == 0) sb.AppendLine("spec_umiejetnosc = " + Data.SkillKeys[e.BuildSkill]);
+                    if (e.BuildKind == 2)
+                        sb.AppendLine("spec_surowiec = " + e.BuildResource + "   ; " + ResourceNames[e.BuildResource]);
+                }
+                else if (e.SpecMode == HeroEntry.SpecCopy)
                 {
                     string src;
                     sb.AppendLine("specjalizacja = " + e.SpecFrom + (heroNames.TryGetValue(e.SpecFrom, out src) ? "   ; like " + src : ""));
                 }
                 else sb.AppendLine("specjalizacja = " + (e.SpecMode == HeroEntry.SpecNone ? "brak" : "wlasna"));
+                if (e.StartBook >= 0) sb.AppendLine("ksiega = " + (e.StartBook == 1 ? "tak" : "nie"));
                 string specName = StripDiacritics(e.SpecName), specDesc = StripDiacritics(e.SpecDesc);
                 if (specName.Length > 0) sb.AppendLine("nazwa_specjalizacji = " + specName);
                 if (specDesc.Length > 0) sb.AppendLine("opis_specjalizacji = " + specDesc);
@@ -959,8 +1361,12 @@ namespace Kreator
                 }
                 if (e.Skills.Count > 0)
                     sb.AppendLine("umiejetnosci = " + string.Join(", ", e.Skills.Select(k => Data.SkillKeys[k.Key] + ":" + k.Value)));
-                if (e.Spells.Count > 0)
-                    sb.AppendLine("czary = " + string.Join(", ", e.Spells.OrderBy(x => x)));
+                if (e.SpellsSet)
+                    sb.AppendLine("czary = " + (e.Spells.Count > 0 ? string.Join(", ", e.Spells.OrderBy(x => x)) +
+                        "   ; " + string.Join(", ", e.Spells.OrderBy(x => x).Select(x => Data.SpellNames[x])) : "brak"));
+                if (e.Army != null && e.Army.Count > 0)
+                    sb.AppendLine("armia = " + string.Join(", ", e.Army.Select(a => a[0] + ":" + (a[1] == a[2] ? a[1].ToString() : a[1] + "-" + a[2]))) +
+                        "   ; " + string.Join(", ", e.Army.Select(a => CreatureLabel(a[0]))));
                 if (e.Stats != null)
                     sb.AppendLine("statystyki = " + string.Join("/", e.Stats));
             }

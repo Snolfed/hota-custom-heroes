@@ -15,8 +15,9 @@ For local games only (hot-seat / single player) - see README for details.
      WlasniBohaterowie\   (whole folder)
 
 4. Start the game once and start a NEW game, so the mod writes the hero, specialty
-   and portrait data the editor uses, then close it.
-   (Updating from 1.0.0: keep your WlasniBohaterowie\bohaterowie.ini - don't
+   and portrait data the editor uses (also when updating: the list gets new columns),
+   then close it.
+   (Updating from an older version: keep your WlasniBohaterowie\bohaterowie.ini - don't
    overwrite it with the example one from this zip.)
 
 5. Run WlasniBohaterowie\Kreator.exe, set up your heroes, click Save, start the game.

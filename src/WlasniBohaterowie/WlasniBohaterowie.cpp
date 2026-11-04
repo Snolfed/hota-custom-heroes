@@ -47,6 +47,18 @@ static const int   SPEC_PARAMS = 0x08;              // ints up to 0x1C: type-spe
 static const int   SPEC_SHORT = 0x1C;               // char*, e.g. "+350 Gold"
 static const int   SPEC_FULL = 0x20;                // char*
 static const int   SPEC_DESC = 0x24;                // char*, long description
+// Type 4 (creature): +0x04 creature (it and its upgrade), +0x08 attack, +0x0C defense,
+// +0x10 damage (min and max). Applied by 0x4E6390; its +1 speed is hard-coded for Xeron only.
+static const int   SPEC_TYPE_CREATURE = 4;
+static const int   SPEC_ATTACK = 0x08, SPEC_DEFENSE = 0x0C, SPEC_DAMAGE = 0x10;
+static const DWORD ADDR_CREATURE_BONUS = 0x4E6390;  // void __thiscall (hero, creature, creatureStats*)
+static const BYTE  PROLOGUE_SUB14[6] = { 0x55, 0x8B, 0xEC, 0x83, 0xEC, 0x14 };  // push ebp; mov ebp,esp; sub esp,0x14
+static const int   STATS_SPEED = 0x50;
+static const DWORD ADDR_CREATURE_UPGRADE = 0x47AAD0; // int __fastcall (creature) -> upgraded creature or -1
+static const DWORD ADDR_CREATURES_PTR = 0x6747B0;    // -> creature table, 0x74 bytes per creature
+static const int   CREATURE_SIZE = 0x74;
+static const int   CREATURE_TOWN = 0x00, CREATURE_LEVEL = 0x04;
+static const int   CREATURE_NAME_PLURAL = 0x18;     // char*
 // Picture controls in dialogs (class vtable 0x63EC48): vtable[4] draws `def` frame `frame`
 // of group `group`. Specialty icons are frame <hero id> of un44.def / un32.def.
 static const DWORD ADDR_DLGDEF_VTABLE = 0x63EC48;
@@ -54,6 +66,8 @@ static const int   DLGDEF_VT_DRAW = 4;
 static const int   DLGDEF_DEF = 0x30;
 static const int   DLGDEF_FRAME = 0x34;
 static const int   DLGDEF_GROUP = 0x38;
+static const int   DLGDEF_X = 0x18, DLGDEF_Y = 0x1A, DLGDEF_W = 0x1C, DLGDEF_H = 0x1E;  // shorts
+static const int   DEF_WIDTH = 0x30, DEF_HEIGHT = 0x34;  // full picture size of a loaded DEF
 static const DWORD ADDR_LOAD_DEF = 0x55C9C0;        // void* __fastcall (const char* name), cached
 static const int   DEF_GROUP_COUNT = 0x28;
 static const int   DEF_GROUPS = 0x1C;               // group*[]; group+0 = frame count
@@ -73,6 +87,10 @@ static const int   HERO_SKILL_LEVELS = 0xC9;        // BYTE[28]
 static const int   HERO_SPELLBOOK_SLOT = 0x1B5;     // worn artifact slot 17, artifact id 0 = spell book
 static const int   HERO_SPELLS_A = 0x3EA;           // BYTE[70], both set by the game for a starting spell
 static const int   HERO_SPELLS_B = 0x430;
+static const int   HERO_ARMY_TYPES = 0x91;          // int[7] creature (-1 empty)
+static const int   HERO_ARMY_COUNTS = 0xAD;         // int[7]
+static const int   HERO_TYPE_ARMY = 0x24;           // int[3] creature
+static const int   HERO_TYPE_ARMY_COUNTS = 0x44;    // {int low, int high}[3]
 
 static const int SKILL_COUNT = 28;
 static const int SPELL_COUNT = 70;
@@ -98,6 +116,9 @@ struct HeroConfig
                                   // starting skills: 1st listed -> 2nd slot, 2nd listed -> 1st slot
     bool spell[SPELL_COUNT];
     int firstSpell;               // first spell listed in "czary", -1 = none; replaces the hero's starting spell
+    bool spellsSet;               // "czary" given ("brak" = no starting spell at all)
+    int armyCount;                // starting army from "armia" (0 = game default)
+    int armyType[7], armyMin[7], armyMax[7];
     bool hasStats;
     int stats[4];                 // attack, defense, power, knowledge
     bool hasStartExtras;
@@ -105,12 +126,25 @@ struct HeroConfig
     char specName[64];            // shown in game; empty = keep the (copied) text
     char specDesc[256];
     char name[13];                // new hero name (max 12 chars), empty = keep
+    // SPEC_BUILT: a specialty of game type `buildType` for `buildParam`:
+    //   0 secondary skill, 1 creature growing with level, 2 resource, 3 spell,
+    //   4 creature with fixed bonuses (crAttack.. crDamage; crSpeed added by the mod), 5 speed for all.
+    int buildType, buildParam;
+    int buildTemplate;            // hero already having this specialty (texts, icon, numbers), -1 = none
+    int crAttack, crDefense, crDamage, crSpeed;
     int iconHero;                 // show this hero's specialty icon, -1 = no change
     int iconSkill;                // show this secondary skill's icon, -1 = no change
+    int iconCreature;             // show this creature's small portrait, -1 = no change
+    bool iconAuto;                // no "ikona" key: picked once the game tables are loaded
+    int startBook;                // spell book at start: -1 = game default, 0 = no, 1 = yes
 };
 
 static const int SPEC_UNSET = -2;  // keep the hero's own specialty
 static const int SPEC_NONE = -1;   // no specialty effect (only this mod's bonuses)
+static const int SPEC_BUILT = -3;  // specialty built from "specjalizacja_typ" (+ its parameter keys)
+
+enum { BUILD_SKILL = 0, BUILD_CREATURE_LEVEL = 1, BUILD_RESOURCE = 2, BUILD_SPELL = 3,
+       BUILD_CREATURE_FIXED = 4, BUILD_SPEED = 5 };
 
 static const int MAX_HEROES = 64;
 static HeroConfig g_heroes[MAX_HEROES];
@@ -118,6 +152,7 @@ static int g_heroCount = 0;
 static char g_dir[MAX_PATH];
 static char g_logPath[MAX_PATH];
 static bool g_seenHero[512];
+static bool g_anyIcon = false;   // some hero's specialty icon is replaced (draw hook active)
 
 typedef int(__thiscall* SpellDamageFn)(void* hero, int spell, int damage, void* target);
 typedef void(__thiscall* HeroInitFn)(void* hero, int heroId);
@@ -222,11 +257,16 @@ static void ParseSpells(const char* section, const char* text, HeroConfig& h)
 {
     char buf[512];
     lstrcpynA(buf, text, sizeof(buf));
-    for (char* tok = strtok(buf, ",; "); tok; tok = strtok(NULL, ",; "))
+    char* comment = strchr(buf, ';');   // "czary = 23   ; Meteor Shower"
+    if (comment) *comment = 0;
+    for (char* tok = strtok(buf, ", "); tok; tok = strtok(NULL, ", "))
     {
         char name[64];
         Normalize(tok, name, sizeof(name));
         if (!name[0]) continue;
+        h.spellsSet = true;
+        h.hasStartExtras = true;
+        if (strcmp(name, "brak") == 0) continue;
         int spell = -1;
         if (name[0] >= '0' && name[0] <= '9') spell = atoi(name);
         else if (strcmp(name, "implozja") == 0) spell = 18;
@@ -237,6 +277,31 @@ static void ParseSpells(const char* section, const char* text, HeroConfig& h)
         }
         h.spell[spell] = true;
         if (h.firstSpell < 0) h.firstSpell = spell;
+        h.hasStartExtras = true;
+    }
+}
+
+// "12:10-20, 13:5" (creature:count or creature:min-max, up to 7 stacks) -> starting army
+static void ParseArmy(const char* section, const char* text, HeroConfig& h)
+{
+    char buf[512];
+    lstrcpynA(buf, text, sizeof(buf));
+    char* comment = strchr(buf, ';');   // "armia = 0:10-20   ; Pikemen"
+    if (comment) *comment = 0;
+    for (char* tok = strtok(buf, ","); tok && h.armyCount < 7; tok = strtok(NULL, ","))
+    {
+        int creature, lo, hi;
+        int n = sscanf(tok, " %d : %d - %d", &creature, &lo, &hi);
+        if (n == 2) hi = lo;
+        if (n < 2 || creature < 0 || creature >= 1000 || lo < 1 || hi < lo || hi > 9999)
+        {
+            Log("[%s] zly oddzial armii: '%s' (format stwor:liczba albo stwor:min-max)", section, tok);
+            continue;
+        }
+        h.armyType[h.armyCount] = creature;
+        h.armyMin[h.armyCount] = lo;
+        h.armyMax[h.armyCount] = hi;
+        ++h.armyCount;
         h.hasStartExtras = true;
     }
 }
@@ -292,6 +357,8 @@ static void LoadConfig()
         ParseSpells(section, text, h);
         GetPrivateProfileStringA(section, "statystyki", "", text, sizeof(text), ini);
         ParseStats(section, text, h);
+        GetPrivateProfileStringA(section, "armia", "", text, sizeof(text), ini);
+        ParseArmy(section, text, h);
 
         bool hasBonus = h.schools != 0 && h.percent != 0;
         h.specFrom = SPEC_UNSET;
@@ -302,8 +369,45 @@ static void LoadConfig()
         else if (strcmp(spec, "brak") == 0) h.specFrom = SPEC_NONE;
         else if (spec[0] && strcmp(spec, "wlasna") != 0)
             Log("[%s] nieznana specjalizacja: '%s' (podaj numer bohatera, 'brak' albo 'wlasna')", section, text);
+        // Built specialty: "specjalizacja_typ" = stwor (fixed bonus, the default when only
+        // "stwor" is given) / stwor_poziom / czar / umiejetnosc / surowiec / szybkosc, with
+        // "stwor" (+ stwor_atak/obrona/obrazenia/szybkosc), "spec_czar", "spec_umiejetnosc"
+        // or "spec_surowiec" as its parameter.
+        h.crAttack = GetPrivateProfileIntA(section, "stwor_atak", 0, ini);
+        h.crDefense = GetPrivateProfileIntA(section, "stwor_obrona", 0, ini);
+        h.crDamage = GetPrivateProfileIntA(section, "stwor_obrazenia", 0, ini);
+        h.crSpeed = GetPrivateProfileIntA(section, "stwor_szybkosc", 0, ini);
+        int creature = GetPrivateProfileIntA(section, "stwor", -1, ini);
+        GetPrivateProfileStringA(section, "specjalizacja_typ", "", text, sizeof(text), ini);
+        char kind[32];
+        Normalize(text, kind, sizeof(kind));
+        h.buildType = -1;
+        h.buildTemplate = -1;
+        if (strcmp(kind, "stwor_poziom") == 0 || strcmp(kind, "stworpoziom") == 0) { h.buildType = BUILD_CREATURE_LEVEL; h.buildParam = creature; }
+        else if (strcmp(kind, "czar") == 0) { h.buildType = BUILD_SPELL; h.buildParam = GetPrivateProfileIntA(section, "spec_czar", -1, ini); }
+        else if (strcmp(kind, "umiejetnosc") == 0)
+        {
+            GetPrivateProfileStringA(section, "spec_umiejetnosc", "", text, sizeof(text), ini);
+            h.buildType = BUILD_SKILL;
+            h.buildParam = FindSkill(text);
+        }
+        else if (strcmp(kind, "surowiec") == 0) { h.buildType = BUILD_RESOURCE; h.buildParam = GetPrivateProfileIntA(section, "spec_surowiec", -1, ini); }
+        else if (strcmp(kind, "szybkosc") == 0) { h.buildType = BUILD_SPEED; h.buildParam = 2; }
+        else if (creature >= 0) { h.buildType = BUILD_CREATURE_FIXED; h.buildParam = creature; }
+        if (h.buildType >= 0 && h.buildParam < 0)
+        {
+            Log("[%s] specjalizacja '%s' bez parametru - pominieta", section, kind);
+            h.buildType = -1;
+        }
+        if (h.buildType >= 0) h.specFrom = SPEC_BUILT;
         // A school bonus without any "specjalizacja" key replaces the hero's own specialty.
-        if (!spec[0] && hasBonus) h.specFrom = SPEC_NONE;
+        else if (!spec[0] && hasBonus) h.specFrom = SPEC_NONE;
+
+        // Spell book at start: "ksiega = tak / nie" (absent = game default).
+        GetPrivateProfileStringA(section, "ksiega", "", text, sizeof(text), ini);
+        Normalize(text, kind, sizeof(kind));
+        h.startBook = strcmp(kind, "tak") == 0 ? 1 : strcmp(kind, "nie") == 0 ? 0 : -1;
+        if (h.startBook >= 0) h.hasStartExtras = true;
         GetPrivateProfileStringA(section, "imie", "", h.name, sizeof(h.name), ini);
         GetPrivateProfileStringA(section, "nazwa_specjalizacji", "", h.specName, sizeof(h.specName), ini);
         GetPrivateProfileStringA(section, "opis_specjalizacji", "", h.specDesc, sizeof(h.specDesc), ini);
@@ -311,6 +415,8 @@ static void LoadConfig()
         // or for a school bonus without a specialty the magic skill icon (like Adrienne's Fire Magic).
         h.iconHero = -1;
         h.iconSkill = -1;
+        h.iconCreature = -1;
+        h.iconAuto = false;
         GetPrivateProfileStringA(section, "ikona", "", text, sizeof(text), ini);
         char icon[64];
         Normalize(text, icon, sizeof(icon));
@@ -324,6 +430,7 @@ static void LoadConfig()
         {
             if (h.specFrom >= 0) h.iconHero = h.specFrom;
             else if (h.specFrom == SPEC_NONE && hasBonus) h.iconSkill = MagicSkillOf(h.schools);
+            else if (h.specFrom == SPEC_BUILT) h.iconAuto = true;   // FillBuiltSpecialties
         }
 
         if (h.specFrom == SPEC_NONE && hasBonus && !h.specName[0])
@@ -351,6 +458,10 @@ static void LoadConfig()
         Log("[%s] bohater id=%d, szkoly=0x%X, bonus=%d%%", section, h.id, h.schools, h.percent);
         if (h.specFrom >= 0) Log("    specjalizacja skopiowana od bohatera id=%d", h.specFrom);
         if (h.specFrom == SPEC_NONE) Log("    oryginalna specjalizacja wylaczona");
+        if (h.specFrom == SPEC_BUILT)
+            Log("    nowa specjalizacja: typ %d, parametr %d (stwor: atak %d, obrona %d, obrazenia %d, szybkosc %d)",
+                h.buildType, h.buildParam, h.crAttack, h.crDefense, h.crDamage, h.crSpeed);
+        if (h.startBook >= 0) Log("    ksiega na start: %s", h.startBook ? "tak" : "nie");
         if (h.name[0]) Log("    nowe imie: %s", h.name);
         if (h.specName[0]) Log("    nazwa specjalizacji: %s", h.specName);
         if (h.iconHero >= 0) Log("    ikona specjalizacji bohatera id=%d", h.iconHero);
@@ -359,6 +470,9 @@ static void LoadConfig()
             if (h.skillLevel[s]) Log("    umiejetnosc %s: %s", SKILL_NAMES[s], g_levelNames[h.skillLevel[s]]);
         for (int s = 0; s < SPELL_COUNT; ++s)
             if (h.spell[s]) Log("    czar %d", s);
+        if (h.spellsSet && h.firstSpell < 0) Log("    bez czaru startowego");
+        for (int s = 0; s < h.armyCount; ++s)
+            Log("    armia: stwor %d x %d-%d", h.armyType[s], h.armyMin[s], h.armyMax[s]);
         if (h.hasStats)
             Log("    statystyki %d/%d/%d/%d", h.stats[0], h.stats[1], h.stats[2], h.stats[3]);
         ++g_heroCount;
@@ -385,7 +499,22 @@ static void SafeHeroName(const BYTE* hero, char* out)
     out[i] = 0;
 }
 
-static void ApplyStartExtras(BYTE* hero, const char* when)
+// Every configured stack, its count drawn between min and max.
+static void SetStartArmy(BYTE* hero, const HeroConfig& h)
+{
+    if (h.armyCount <= 0) return;
+    static bool s_seeded = false;
+    if (!s_seeded) { s_seeded = true; srand(GetTickCount()); }
+    int* types = (int*)(hero + HERO_ARMY_TYPES);
+    int* counts = (int*)(hero + HERO_ARMY_COUNTS);
+    for (int i = 0; i < 7; ++i)
+    {
+        types[i] = i < h.armyCount ? h.armyType[i] : -1;
+        counts[i] = i < h.armyCount ? h.armyMin[i] + rand() % (h.armyMax[i] - h.armyMin[i] + 1) : 0;
+    }
+}
+
+static void ApplyStartExtras(BYTE* hero, const char* when, bool newHero)
 {
     const HeroConfig* h = FindHero(*(int*)(hero + HERO_ID));
     if (!h) return;
@@ -407,8 +536,19 @@ static void ApplyStartExtras(BYTE* hero, const char* when)
         hero[HERO_SPELLS_B + s] = 1;
         anySpell = true;
     }
-    if (anySpell && *(int*)(hero + HERO_SPELLBOOK_SLOT) == -1)
-        *(int*)(hero + HERO_SPELLBOOK_SLOT) = 0;
+    // Spell book: "ksiega = tak" gives one, "nie" takes it away; otherwise starting spells bring one.
+    int& book = *(int*)(hero + HERO_SPELLBOOK_SLOT);
+    if (h->startBook == 1 || (anySpell && h->startBook != 0))
+    {
+        if (book == -1) book = 0;
+    }
+    else if (h->startBook == 0 && book == 0)
+        book = -1;
+
+    // Starting army: only for a hero created from the defaults, so an army the map gives
+    // a hero is kept. (The game draws the army again when the hero joins a player; the
+    // army hook sets it once more then.)
+    if (newHero) SetStartArmy(hero, *h);
 
     if (h->hasStats)
     {
@@ -440,7 +580,7 @@ static void DumpHeroList()
     wsprintfA(path, "%s\\lista_bohaterow.txt", g_dir);
     FILE* f = fopen(path, "w");
     if (!f) return;
-    // "id;name;class id;class name;town id;A/D/P/K;portrait files" (class -1 / town -1 when
+    // "id;name;class id;class name;town id;A/D/P/K;portrait files;spell;book;army" (class -1 / town -1 when
     // unreadable). Portrait files: every "*.pcx" string the hero type entry points to,
     // separated by '|' (small and large portrait), for the editor's preview.
     const BYTE* table = *(const BYTE**)ADDR_HERO_TYPES_PTR;
@@ -481,8 +621,18 @@ static void DumpHeroList()
             if (portraits[0] || off == HERO_TYPE_PORTRAIT_LARGE) lstrcatA(portraits, "|");
             lstrcatA(portraits, name);
         }
-        fprintf(f, "%d;%.12s;%d;%s;%d;%d/%d/%d/%d;%s\n", id, name, cls, className, town,
-                stats[0], stats[1], stats[2], stats[3], portraits);
+        // Starting spell (-1 none), spell book (0/1) and army "creature:low-high|..." (3 stacks).
+        char army[96] = "";
+        for (int s = 0; s < 3; ++s)
+        {
+            char one[32];
+            wsprintfA(one, "%s%d:%d-%d", s ? "|" : "", *(const int*)(entry + HERO_TYPE_ARMY + s * 4),
+                      *(const int*)(entry + HERO_TYPE_ARMY_COUNTS + s * 8), *(const int*)(entry + HERO_TYPE_ARMY_COUNTS + s * 8 + 4));
+            lstrcatA(army, one);
+        }
+        fprintf(f, "%d;%.12s;%d;%s;%d;%d/%d/%d/%d;%s;%d;%d;%s\n", id, name, cls, className, town,
+                stats[0], stats[1], stats[2], stats[3], portraits,
+                *(const int*)(entry + HERO_TYPE_SPELL), entry[HERO_TYPE_HAS_BOOK] ? 1 : 0, army);
         ++count;
     }
     fclose(f);
@@ -552,6 +702,23 @@ static void BuildSpecEntry(const HeroConfig& h, BYTE* out)
     {
         memcpy(out, g_specOriginal + h.specFrom * SPEC_SIZE, SPEC_SIZE);
     }
+    else if (h.specFrom == SPEC_BUILT)
+    {
+        // A hero already having this specialty is the template (its numbers and texts);
+        // otherwise just the type and parameter, which is all the game reads for them.
+        if (h.buildTemplate >= 0 && h.buildType != BUILD_CREATURE_FIXED)
+            memcpy(out, g_specOriginal + h.buildTemplate * SPEC_SIZE, SPEC_SIZE);
+        else
+            memset(out, 0, SPEC_SHORT);
+        *(int*)(out + SPEC_TYPE) = h.buildType;
+        *(int*)(out + SPEC_BONUS) = h.buildParam;
+        if (h.buildType == BUILD_CREATURE_FIXED)
+        {
+            *(int*)(out + SPEC_ATTACK) = h.crAttack;
+            *(int*)(out + SPEC_DEFENSE) = h.crDefense;
+            *(int*)(out + SPEC_DAMAGE) = h.crDamage;
+        }
+    }
     else if (h.specFrom == SPEC_NONE)
     {
         // Type 0 (secondary skill) like Adrienne's Fire Magic: with a school bonus it names that
@@ -580,16 +747,31 @@ static void ApplySpecialties(bool logChanges)
 
         // Starting spell and skills in the hero type data: what new heroes get and hero
         // previews (tavern, scenario setup) show.
-        if (h.id >= 0 && h.id < g_specCount && (h.firstSpell >= 0 || h.skillOrder[0] >= 0 || h.name[0]))
+        if (h.id >= 0 && h.id < g_specCount && (h.spellsSet || h.skillOrder[0] >= 0 || h.name[0] || h.startBook >= 0 || h.armyCount > 0))
         {
             BYTE wanted[HERO_TYPE_SIZE];
             BYTE* type = types + h.id * HERO_TYPE_SIZE;
             memcpy(wanted, type, HERO_TYPE_SIZE);
             if (h.name[0]) *(const char**)(wanted + HERO_TYPE_NAME) = h.name;
-            if (h.firstSpell >= 0)
+            if (h.firstSpell >= 0 && h.startBook != 0)
             {
                 *(int*)(wanted + HERO_TYPE_SPELL) = h.firstSpell;
                 wanted[HERO_TYPE_HAS_BOOK] = 1;
+            }
+            if (h.spellsSet && h.firstSpell < 0) *(int*)(wanted + HERO_TYPE_SPELL) = -1;
+            // Starting army in the hero data (what hero previews show): the first 3 stacks.
+            if (h.armyCount > 0)
+                for (int s = 0; s < 3; ++s)
+                {
+                    *(int*)(wanted + HERO_TYPE_ARMY + s * 4) = s < h.armyCount ? h.armyType[s] : -1;
+                    *(int*)(wanted + HERO_TYPE_ARMY_COUNTS + s * 8) = s < h.armyCount ? h.armyMin[s] : 0;
+                    *(int*)(wanted + HERO_TYPE_ARMY_COUNTS + s * 8 + 4) = s < h.armyCount ? h.armyMax[s] : 0;
+                }
+            if (h.startBook == 1) wanted[HERO_TYPE_HAS_BOOK] = 1;
+            if (h.startBook == 0)
+            {
+                wanted[HERO_TYPE_HAS_BOOK] = 0;
+                *(int*)(wanted + HERO_TYPE_SPELL) = -1;
             }
             const int slots[2] = { HERO_TYPE_SKILL2, HERO_TYPE_SKILL1 };
             for (int s = 0; s < 2; ++s)
@@ -628,6 +810,246 @@ static void ApplySpecialties(bool logChanges)
         VirtualProtect(entry, SPEC_SIZE, old, &old);
         if (logChanges) Log("Specjalizacja ustawiona: id=%d (typ %d, parametr %d)", h.id, *(int*)(wanted + SPEC_TYPE), *(int*)(wanted + SPEC_BONUS));
     }
+}
+
+static const char* CreatureName(int id)
+{
+    const BYTE* table = *(const BYTE* volatile*)ADDR_CREATURES_PTR;
+    if (!table || id < 0 || IsBadReadPtr(table + id * CREATURE_SIZE, CREATURE_SIZE)) return NULL;
+    const char* s = *(const char* const*)(table + id * CREATURE_SIZE + CREATURE_NAME_PLURAL);
+    return (s && !IsBadReadPtr(s, 1) && s[0]) ? s : NULL;
+}
+
+static int CreatureUpgrade(int id)
+{
+    typedef int(__fastcall* UpgradeFn)(int creature);
+    return id < 0 ? -1 : ((UpgradeFn)ADDR_CREATURE_UPGRADE)(id);
+}
+
+// Base (non-upgraded) creature of `id`: the creature whose upgrade is `id`, else `id` itself.
+static int CreatureBase(int id)
+{
+    for (int c = 0; c < 400 && CreatureName(c); ++c)
+        if (c != id && CreatureUpgrade(c) == id) return c;
+    return id;
+}
+
+// "id;plural name;town;level;upgrade id" for the editor's creature list.
+static void DumpCreatureList()
+{
+    const BYTE* table = *(const BYTE* volatile*)ADDR_CREATURES_PTR;
+    char path[MAX_PATH];
+    wsprintfA(path, "%s\\lista_stworow.txt", g_dir);
+    FILE* f = fopen(path, "w");
+    if (!f || !table) { if (f) fclose(f); return; }
+    int count = 0;
+    for (int id = 0; id < 400; ++id)
+    {
+        const char* name = CreatureName(id);
+        if (!name) break;
+        char clean[64];
+        CleanText(name, clean, sizeof(clean));
+        const BYTE* c = table + id * CREATURE_SIZE;
+        fprintf(f, "%d;%s;%d;%d;%d\n", id, clean, *(const int*)(c + CREATURE_TOWN), *(const int*)(c + CREATURE_LEVEL),
+                CreatureUpgrade(id));
+        ++count;
+    }
+    fclose(f);
+    Log("Zapisano liste %d stworow do %s", count, path);
+}
+
+static const char* SKILL_NAMES_EN[SKILL_COUNT] = {
+    "Pathfinding", "Archery", "Logistics", "Scouting", "Diplomacy", "Navigation",
+    "Leadership", "Wisdom", "Mysticism", "Luck", "Ballistics", "Eagle Eye",
+    "Necromancy", "Estates", "Fire Magic", "Air Magic", "Water Magic", "Earth Magic",
+    "Scholar", "Tactics", "Artillery", "Learning", "Offense", "Armorer",
+    "Intelligence", "Sorcery", "Resistance", "First Aid"
+};
+static const char* RESOURCE_NAMES_EN[7] = { "Wood", "Mercury", "Ore", "Sulfur", "Crystal", "Gems", "Gold" };
+static const int SPELL_NAME = 0x10;     // char* in the spell table
+
+static const char* SpellName(int spell)
+{
+    const BYTE* spells = *(const BYTE* volatile*)ADDR_SPELL_TABLE_PTR;
+    if (!spells || spell < 0 || spell >= SPELL_COUNT) return NULL;
+    const char* s = *(const char* const*)(spells + spell * SPELL_SIZE + SPELL_NAME);
+    return (s && !IsBadReadPtr(s, 1) && s[0]) ? s : NULL;
+}
+
+static int SpecOriginalType(int id) { return *(const int*)(g_specOriginal + id * SPEC_SIZE + SPEC_TYPE); }
+static int SpecOriginalParam(int id) { return *(const int*)(g_specOriginal + id * SPEC_SIZE + SPEC_BONUS); }
+static const char* SpecOriginalText(int id, int offset)
+{
+    const char* s = *(const char* const*)(g_specOriginal + id * SPEC_SIZE + offset);
+    return (s && !IsBadReadPtr(s, 1)) ? s : "";
+}
+
+// First hero whose original specialty has one of the types in `types` (-1 ends) and `param`.
+static int FindSpecTemplate(const int* types, int param)
+{
+    for (int t = 0; types[t] >= 0; ++t)
+        for (int id = 0; id < g_specCount; ++id)
+            if (SpecOriginalType(id) == types[t] && SpecOriginalParam(id) == param) return id;
+    return -1;
+}
+
+// The percent in the game's own text of creature specialties growing with level
+// ("... by 20% for every 6 levels"), so new ones read the same.
+static int CreatureLevelPercent()
+{
+    for (int id = 0; id < g_specCount; ++id)
+    {
+        if (SpecOriginalType(id) != BUILD_CREATURE_LEVEL) continue;
+        const char* d = SpecOriginalText(id, SPEC_DESC);
+        for (const char* p = strchr(d, '%'); p; p = strchr(p + 1, '%'))
+        {
+            const char* q = p;
+            while (q > d && q[-1] >= '0' && q[-1] <= '9') --q;
+            if (q < p) return atoi(q);
+        }
+    }
+    return 5;
+}
+
+// For specialties built by the mod: creature kinds name the base creature (so both forms are
+// covered, like Xeron's "Devils and Arch Devils"); a hero already having the same specialty
+// gives texts and icon; otherwise texts are written in the game's style and the icon is the
+// creature's portrait, the skill's icon or the spell school's orb.
+static void FillBuiltSpecialties()
+{
+    for (int i = 0; i < g_heroCount; ++i)
+    {
+        HeroConfig& h = g_heroes[i];
+        if (h.specFrom != SPEC_BUILT) continue;
+        bool creatureKind = h.buildType == BUILD_CREATURE_FIXED || h.buildType == BUILD_CREATURE_LEVEL;
+        if (creatureKind)
+        {
+            int base = CreatureBase(h.buildParam);
+            if (base != h.buildParam) Log("Stwor %d to ulepszenie, specjalizacja na %d (oba)", h.buildParam, base);
+            h.buildParam = base;
+        }
+
+        const int sameType[2] = { h.buildType, -1 };
+        if (h.buildType != BUILD_CREATURE_FIXED) h.buildTemplate = FindSpecTemplate(sameType, h.buildParam);
+        int iconTemplate = h.buildTemplate;
+        if (creatureKind)
+        {
+            const int creatureTypes[3] = { h.buildType, h.buildType == BUILD_CREATURE_FIXED ? BUILD_CREATURE_LEVEL : BUILD_CREATURE_FIXED, -1 };
+            iconTemplate = FindSpecTemplate(creatureTypes, h.buildParam);
+        }
+
+        if (h.iconAuto)
+        {
+            if (iconTemplate >= 0) h.iconHero = iconTemplate;
+            else if (creatureKind) h.iconCreature = h.buildParam;
+            else if (h.buildType == BUILD_SKILL) h.iconSkill = h.buildParam;
+            else if (h.buildType == BUILD_SPELL)
+            {
+                const BYTE* spells = *(const BYTE* volatile*)ADDR_SPELL_TABLE_PTR;
+                if (spells) h.iconSkill = MagicSkillOf(*(const int*)(spells + h.buildParam * SPELL_SIZE + SPELL_SCHOOL_FLAGS));
+            }
+            if (h.iconHero >= 0 || h.iconSkill >= 0 || h.iconCreature >= 0) g_anyIcon = true;
+        }
+
+        if (h.buildTemplate >= 0)
+        {
+            if (!h.specName[0]) lstrcpynA(h.specName, SpecOriginalText(h.buildTemplate, SPEC_SHORT), sizeof(h.specName));
+            if (!h.specDesc[0]) lstrcpynA(h.specDesc, SpecOriginalText(h.buildTemplate, SPEC_DESC), sizeof(h.specDesc));
+            Log("Specjalizacja id=%d jak u bohatera %d (teksty, ikona)", h.id, h.buildTemplate);
+            continue;
+        }
+
+        const char* cname = creatureKind ? CreatureName(h.buildParam) : NULL;
+        const char* upname = creatureKind ? CreatureName(CreatureUpgrade(h.buildParam)) : NULL;
+        if (creatureKind && !cname) cname = "Creatures";
+        char name[64] = "", desc[256] = "";
+        switch (h.buildType)
+        {
+        case BUILD_CREATURE_FIXED:
+        {
+            char who[96];
+            if (upname) wsprintfA(who, "%s and %s", cname, upname);
+            else lstrcpynA(who, cname, sizeof(who));
+            // wsprintf has no "%+d": write the sign by hand.
+            char parts[4][32];
+            int n = 0;
+            const int values[4] = { h.crAttack, h.crDefense, h.crDamage, h.crSpeed };
+            const char* labels[4] = { "Attack", "Defense", "Damage", "Speed" };
+            for (int k = 0; k < 4; ++k)
+                if (values[k]) wsprintfA(parts[n++], "%s%d %s", values[k] > 0 ? "+" : "", values[k], labels[k]);
+            char list[160] = "";
+            for (int k = 0; k < n; ++k)
+            {
+                if (k > 0) lstrcatA(list, k == n - 1 ? " and " : ", ");
+                lstrcatA(list, parts[k]);
+            }
+            if (n == 0) lstrcpyA(list, "no bonus");
+            lstrcpynA(name, cname, sizeof(name));
+            wsprintfA(desc, "%s get %s.", who, list);
+            break;
+        }
+        case BUILD_CREATURE_LEVEL:
+        {
+            const BYTE* table = *(const BYTE* volatile*)ADDR_CREATURES_PTR;
+            int every = table ? *(const int*)(table + h.buildParam * CREATURE_SIZE + CREATURE_LEVEL) + 1 : 1;
+            lstrcpynA(name, cname, sizeof(name));
+            if (upname)
+                wsprintfA(desc, "Increases the Speed of any %s or %s by 1 and their Attack and Defense skills by %d%% for every %d levels (rounded up).",
+                          cname, upname, CreatureLevelPercent(), every);
+            else
+                wsprintfA(desc, "Increases the Speed of any %s by 1 and their Attack and Defense skills by %d%% for every %d levels (rounded up).",
+                          cname, CreatureLevelPercent(), every);
+            break;
+        }
+        case BUILD_SKILL:
+            if (h.buildParam < SKILL_COUNT)
+            {
+                lstrcpynA(name, SKILL_NAMES_EN[h.buildParam], sizeof(name));
+                wsprintfA(desc, "Receives a 5%% per level bonus to %s skill percentage.", SKILL_NAMES_EN[h.buildParam]);
+            }
+            break;
+        case BUILD_RESOURCE:
+            if (h.buildParam == 6)
+            {
+                lstrcpyA(name, "+350 Gold");
+                lstrcpyA(desc, "Increases kingdom's income by 350 gold per day.");
+            }
+            else if (h.buildParam >= 0 && h.buildParam < 6)
+            {
+                wsprintfA(name, "+1 %s", RESOURCE_NAMES_EN[h.buildParam]);
+                wsprintfA(desc, "Increases kingdom's income by one unit of %s per day.", RESOURCE_NAMES_EN[h.buildParam]);
+            }
+            break;
+        case BUILD_SPELL:
+        {
+            const char* spell = SpellName(h.buildParam);
+            if (!spell) spell = "the spell";
+            lstrcpynA(name, spell, sizeof(name));
+            wsprintfA(desc, "Casts %s with increased effect, based on the hero's level compared to the level of the target unit.", spell);
+            break;
+        }
+        case BUILD_SPEED:
+            lstrcpyA(name, "Speed");
+            lstrcpyA(desc, "Increases the Speed of allied creatures by 2.");
+            break;
+        }
+        if (!h.specName[0]) lstrcpynA(h.specName, name, sizeof(h.specName));
+        if (!h.specDesc[0]) lstrcpynA(h.specDesc, desc, sizeof(h.specDesc));
+    }
+}
+
+// Speed for creature specialties: the game only gives Xeron's +1; the mod adds the
+// configured amount for its heroes, to the creature and its upgrade.
+typedef void(__thiscall* CreatureBonusFn)(void* hero, int creature, BYTE* stats);
+static CreatureBonusFn g_origCreatureBonus = NULL;
+
+static void __fastcall CreatureBonusHook(BYTE* hero, void* /*edx*/, int creature, BYTE* stats)
+{
+    g_origCreatureBonus(hero, creature, stats);
+    const HeroConfig* h = FindHero(*(int*)(hero + HERO_ID));
+    if (!h || h->specFrom != SPEC_BUILT || h->buildType != BUILD_CREATURE_FIXED || !h->crSpeed || !stats) return;
+    if (creature == h->buildParam || creature == CreatureUpgrade(h->buildParam))
+        *(int*)(stats + STATS_SPEED) += h->crSpeed;
 }
 
 static DWORD WINAPI SpecialtyThread(LPVOID)
@@ -671,6 +1093,8 @@ static DWORD WINAPI SpecialtyThread(LPVOID)
         Log("Tablica specjalizacji gotowa: %d bohaterow", count);
         DumpHeroList();
         DumpSpecialtyList();
+        DumpCreatureList();
+        FillBuiltSpecialties();
         ApplySpecialties(true);
     }
 }
@@ -687,7 +1111,15 @@ static void* g_un44 = NULL;
 static void* g_un32 = NULL;
 static void* g_secskill = NULL;   // 44x44 skill icons, pairs with un44
 static void* g_secsk32 = NULL;    // 32x32 skill icons, pairs with un32
-static bool g_anyIcon = false;
+static void* g_cprsmall = NULL;   // 32x32 creature portraits, frame = creature id + 2
+
+// The game's screen picture: [0x6992D0] + 0x40 -> picture with buffer +0x30, width +0x24,
+// height +0x28, pitch +0x2C (16- or 32-bit). Dialog controls draw into it at
+// control x/y plus the parent's x (+0x18) and y (+0x1C).
+static const DWORD ADDR_WINDOW_MANAGER_PTR = 0x6992D0;
+static const int   WM_SCREEN = 0x40;
+static const int   DLGDEF_PARENT = 0x04;
+static const int   DLG_X = 0x18, DLG_Y = 0x1C;
 
 static int DefFrameCount(void* def, int group)
 {
@@ -1061,6 +1493,214 @@ static void* __fastcall LoadPcx16Hook(const char* name)
     return custom ? custom : g_origPcx16(name);
 }
 
+// ---- full creature icons ----
+// For a creature specialty no hero has, the icon is the whole creature, cut out, with no
+// background. The creature's battle sprite (standing, first frame) is drawn by the game into
+// a private buffer (the screen picture is pointed at it for that one draw), twice - on black
+// and on white - so pixels that come out the same are the creature and the rest is
+// transparent or shadow. It is cropped, scaled down to the icon (RGBA, edges partly
+// transparent), cached, and blended over the window in place of the icon.
+
+struct ScaledIcon { int creature, size; BYTE* pixels; int w, h; bool failed; };   // pixels: RGBA
+static ScaledIcon g_scaledIcons[64];
+static int g_scaledIconCount = 0;
+static const int   CREATURE_DEF_NAME = 0x0C;            // char*, battle sprite
+static const int   BATTLE_GROUP_STANDING = 2;
+
+static void ReadPixel(const BYTE* p, int bpp, int& r, int& g, int& b)
+{
+    if (bpp == 4) { b = p[0]; g = p[1]; r = p[2]; }
+    else { WORD c = *(const WORD*)p; r = (c >> 11) * 255 / 31; g = ((c >> 5) & 0x3F) * 255 / 63; b = (c & 0x1F) * 255 / 31; }
+}
+
+static void WritePixel(BYTE* p, int bpp, int r, int g, int b)
+{
+    if (bpp == 4) { p[0] = (BYTE)b; p[1] = (BYTE)g; p[2] = (BYTE)r; p[3] = 0xFF; }
+    else *(WORD*)p = (WORD)(((r * 31 / 255) << 11) | ((g * 63 / 255) << 5) | (b * 31 / 255));
+}
+
+// Palette colours a battle sprite uses for its selection outline and shadow markers.
+static bool IsMarkerColour(int r, int g, int b)
+{
+    static const BYTE marks[][3] = { {0,255,255}, {255,150,255}, {255,100,255}, {255,50,255},
+                                     {255,0,255}, {255,255,0}, {180,0,255}, {0,255,0} };
+    for (int i = 0; i < 8; ++i)
+        if (abs(r - marks[i][0]) <= 12 && abs(g - marks[i][1]) <= 12 && abs(b - marks[i][2]) <= 12)
+            return true;
+    return false;
+}
+
+// Draws frame 0 of `group` of `def` into a w x h buffer filled with `fill` bytes.
+static void DrawDefToBuffer(BYTE* realCtrl, void* def, int group, BYTE* buffer, int w, int h, int bpp, BYTE fill)
+{
+    memset(buffer, fill, w * h * bpp);
+    BYTE* wm = *(BYTE**)ADDR_WINDOW_MANAGER_PTR;
+    BYTE* screen = *(BYTE**)(wm + WM_SCREEN);
+    BYTE fakeParent[0x40] = {};
+    BYTE fakeCtrl[0x48];
+    memcpy(fakeCtrl, realCtrl, sizeof(fakeCtrl));
+    *(BYTE**)(fakeCtrl + DLGDEF_PARENT) = fakeParent;
+    *(short*)(fakeCtrl + DLGDEF_X) = 0;
+    *(short*)(fakeCtrl + DLGDEF_Y) = 0;
+    *(short*)(fakeCtrl + DLGDEF_W) = (short)w;
+    *(short*)(fakeCtrl + DLGDEF_H) = (short)h;
+    *(void**)(fakeCtrl + DLGDEF_DEF) = def;
+    *(int*)(fakeCtrl + DLGDEF_FRAME) = 0;
+    *(int*)(fakeCtrl + DLGDEF_GROUP) = group;
+    BYTE saved[16];
+    memcpy(saved, screen + PCX_WIDTH, 16);              // width, height, pitch, buffer
+    *(int*)(screen + PCX_WIDTH) = w;
+    *(int*)(screen + PCX_HEIGHT) = h;
+    *(int*)(screen + PCX_SCANLINE) = w * bpp;
+    *(BYTE**)(screen + PCX_PIXELS) = buffer;
+    __try { g_origDefDraw(fakeCtrl); }
+    __except (EXCEPTION_EXECUTE_HANDLER) {}
+    memcpy(screen + PCX_WIDTH, saved, 16);
+}
+
+static const ScaledIcon* GetScaledCreatureIcon(BYTE* realCtrl, int creature, int size)
+{
+    for (int i = 0; i < g_scaledIconCount; ++i)
+        if (g_scaledIcons[i].creature == creature && g_scaledIcons[i].size == size)
+            return g_scaledIcons[i].failed ? NULL : &g_scaledIcons[i];
+    if (g_scaledIconCount >= 64 || size <= 0 || size > 64) return NULL;
+    ScaledIcon& icon = g_scaledIcons[g_scaledIconCount++];
+    memset(&icon, 0, sizeof(icon));
+    icon.creature = creature;
+    icon.size = size;
+    icon.failed = true;
+
+    BYTE* wm = *(BYTE**)ADDR_WINDOW_MANAGER_PTR;
+    BYTE* screen = wm ? *(BYTE**)(wm + WM_SCREEN) : NULL;
+    const BYTE* table = *(const BYTE* volatile*)ADDR_CREATURES_PTR;
+    if (!screen || !table) return NULL;
+    int sw = *(int*)(screen + PCX_WIDTH), spitch = *(int*)(screen + PCX_SCANLINE);
+    int bpp = (sw > 0 && spitch >= sw * 4) ? 4 : 2;
+    const BYTE* cr = table + creature * CREATURE_SIZE;
+    const char* defName = *(const char* const*)(cr + CREATURE_DEF_NAME);
+    if (!defName || IsBadReadPtr(defName, 4)) return NULL;
+
+    // The creature, on black and on white.
+    void* def = ((LoadDefFn)ADDR_LOAD_DEF)(defName);
+    int group = DefFrameCount(def, BATTLE_GROUP_STANDING) > 0 ? BATTLE_GROUP_STANDING : 0;
+    int srcW = def ? *(int*)((BYTE*)def + DEF_WIDTH) : 0, srcH = def ? *(int*)((BYTE*)def + DEF_HEIGHT) : 0;
+    if (srcW <= 0 || srcH <= 0 || srcW > 1024 || srcH > 1024 || DefFrameCount(def, group) <= 0)
+    {
+        Log("Ikona stwora %d: brak animacji %s", creature, defName);
+        return NULL;
+    }
+    BYTE* dark = (BYTE*)malloc(srcW * srcH * bpp);
+    BYTE* light = (BYTE*)malloc(srcW * srcH * bpp);
+    BYTE* solid = (BYTE*)calloc(srcW * srcH, 1);
+    DrawDefToBuffer(realCtrl, def, group, dark, srcW, srcH, bpp, 0x00);
+    DrawDefToBuffer(realCtrl, def, group, light, srcW, srcH, bpp, 0xFF);
+    int left = srcW, top = srcH, right = -1, bottom = -1;
+    for (int y = 0; y < srcH; ++y)
+        for (int x = 0; x < srcW; ++x)
+        {
+            int i = y * srcW + x;
+            if (memcmp(dark + i * bpp, light + i * bpp, bpp == 4 ? 3 : 2) != 0) continue;
+            int r, g, b;
+            ReadPixel(dark + i * bpp, bpp, r, g, b);
+            if (IsMarkerColour(r, g, b)) continue;
+            solid[i] = 1;
+            if (x < left) left = x;
+            if (x > right) right = x;
+            if (y < top) top = y;
+            if (y > bottom) bottom = y;
+        }
+    free(light);
+    if (right < 0)
+    {
+        Log("Ikona stwora %d (%s): rysowanie do bufora nie zadzialalo, zostaje maly portret", creature, defName);
+        free(dark);
+        free(solid);
+        return NULL;
+    }
+    int cw = right - left + 1, ch = bottom - top + 1;
+
+    // Kept as RGBA: only the creature, blended over whatever the window has under the icon.
+    icon.pixels = (BYTE*)calloc(size * size, 4);
+
+
+    // The creature: fitted into the icon less a 1-pixel margin, never enlarged, standing on
+    // the bottom margin, centred; edge pixels as transparent as the part they don't cover.
+    int room = size - 2;
+    int w = cw, h = ch;
+    if (w > room || h > room)
+    {
+        if (cw >= ch) { w = room; h = ch * room / cw; }
+        else { h = room; w = cw * room / ch; }
+        if (w < 1) w = 1;
+        if (h < 1) h = 1;
+    }
+    int px = (size - w) / 2, py = size - 1 - h;
+    for (int y = 0; y < h; ++y)
+        for (int x = 0; x < w; ++x)
+        {
+            int x0 = left + x * cw / w, x1 = left + (x + 1) * cw / w, y0 = top + y * ch / h, y1 = top + (y + 1) * ch / h;
+            if (x1 <= x0) x1 = x0 + 1;
+            if (y1 <= y0) y1 = y0 + 1;
+            int r = 0, g = 0, b = 0, n = 0, total = 0;
+            for (int sy = y0; sy < y1; ++sy)
+                for (int sx = x0; sx < x1; ++sx)
+                {
+                    ++total;
+                    int i = sy * srcW + sx;
+                    if (!solid[i]) continue;
+                    int pr, pg, pb;
+                    ReadPixel(dark + i * bpp, bpp, pr, pg, pb);
+                    r += pr; g += pg; b += pb; ++n;
+                }
+            if (!n) continue;
+            BYTE* out = icon.pixels + ((py + y) * size + px + x) * 4;
+            out[0] = (BYTE)(r / n);
+            out[1] = (BYTE)(g / n);
+            out[2] = (BYTE)(b / n);
+            out[3] = (BYTE)(n * 255 / total);
+        }
+    free(dark);
+    free(solid);
+    icon.w = size;
+    icon.h = size;
+    icon.failed = false;
+    Log("Ikona stwora %d: %s (%dx%d) -> %dx%d w %dx%d, bez tla", creature, defName, cw, ch, w, h, size, size);
+    return &icon;
+}
+
+// Blends a scaled icon over the screen at the icon control, centred, clipped to the screen.
+static bool DrawScaledIcon(BYTE* ctrl, const ScaledIcon& icon)
+{
+    BYTE* wm = *(BYTE**)ADDR_WINDOW_MANAGER_PTR;
+    BYTE* screen = wm ? *(BYTE**)(wm + WM_SCREEN) : NULL;
+    BYTE* parent = *(BYTE**)(ctrl + DLGDEF_PARENT);
+    if (!screen || !parent) return false;
+    int sw = *(int*)(screen + PCX_WIDTH), sh = *(int*)(screen + PCX_HEIGHT), spitch = *(int*)(screen + PCX_SCANLINE);
+    BYTE* sbuf = *(BYTE**)(screen + PCX_PIXELS);
+    if (!sbuf) return false;
+    int bpp = spitch >= sw * 4 ? 4 : 2;
+    int x0 = *(int*)(parent + DLG_X) + *(short*)(ctrl + DLGDEF_X) + (*(short*)(ctrl + DLGDEF_W) - icon.w) / 2;
+    int y0 = *(int*)(parent + DLG_Y) + *(short*)(ctrl + DLGDEF_Y) + (*(short*)(ctrl + DLGDEF_H) - icon.h) / 2;
+    for (int y = 0; y < icon.h; ++y)
+    {
+        int sy = y0 + y;
+        if (sy < 0 || sy >= sh) continue;
+        for (int x = 0; x < icon.w; ++x)
+        {
+            int sx = x0 + x;
+            if (sx < 0 || sx >= sw) continue;
+            const BYTE* p = icon.pixels + (y * icon.w + x) * 4;
+            int a = p[3];
+            if (!a) continue;
+            BYTE* d = sbuf + sy * spitch + sx * bpp;
+            int r, g, b;
+            ReadPixel(d, bpp, r, g, b);
+            WritePixel(d, bpp, (p[0] * a + r * (255 - a)) / 255, (p[1] * a + g * (255 - a)) / 255, (p[2] * a + b * (255 - a)) / 255);
+        }
+    }
+    return true;
+}
+
 static void __fastcall DefDrawHook(BYTE* ctrl)
 {
     static bool s_portraitsDone = false;
@@ -1082,14 +1722,15 @@ static void __fastcall DefDrawHook(BYTE* ctrl)
             g_un32 = LoadDef("un32.def");
             g_secskill = LoadDef("secskill.def");
             g_secsk32 = LoadDef("secsk32.def");
-            Log("Ikony: un44 %d klatek, un32 %d, secskill %d, secsk32 %d", DefFrameCount(g_un44, 0),
-                DefFrameCount(g_un32, 0), DefFrameCount(g_secskill, 0), DefFrameCount(g_secsk32, 0));
+            g_cprsmall = LoadDef("cprsmall.def");
+            Log("Ikony: un44 %d klatek, un32 %d, secskill %d, secsk32 %d, cprsmall %d", DefFrameCount(g_un44, 0),
+                DefFrameCount(g_un32, 0), DefFrameCount(g_secskill, 0), DefFrameCount(g_secsk32, 0), DefFrameCount(g_cprsmall, 0));
         }
         void* def = *(void**)(ctrl + DLGDEF_DEF);
         if (def && (def == g_un44 || def == g_un32) && *(int*)(ctrl + DLGDEF_GROUP) == 0)
         {
             const HeroConfig* h = FindHero(*(int*)(ctrl + DLGDEF_FRAME));
-            if (h && (h->iconHero >= 0 || h->iconSkill >= 0))
+            if (h && (h->iconHero >= 0 || h->iconSkill >= 0 || h->iconCreature >= 0))
             {
                 void* newDef = def;
                 int newFrame = h->iconHero;
@@ -1098,12 +1739,42 @@ static void __fastcall DefDrawHook(BYTE* ctrl)
                     newDef = (def == g_un44) ? g_secskill : g_secsk32;
                     newFrame = SkillIconFrame(h->iconSkill);
                 }
+                else if (h->iconCreature >= 0)
+                {
+                    // Whole creature, cut out; else its small 32x32 portrait.
+                    int size = *(short*)(ctrl + DLGDEF_W);
+                    if (size > *(short*)(ctrl + DLGDEF_H)) size = *(short*)(ctrl + DLGDEF_H);
+                    const ScaledIcon* icon = GetScaledCreatureIcon(ctrl, h->iconCreature, size);
+                    if (icon && DrawScaledIcon(ctrl, *icon)) return;
+                    newDef = g_cprsmall;
+                    newFrame = h->iconCreature + 2;
+                }
                 if (newDef && newFrame >= 0 && newFrame < DefFrameCount(newDef, 0))
                 {
+                    // The icon control draws from its top-left corner; a smaller picture (the
+                    // 32x32 creature portrait in the 44x44 icon) is moved to the middle.
+                    short& x = *(short*)(ctrl + DLGDEF_X);
+                    short& y = *(short*)(ctrl + DLGDEF_Y);
+                    int dx = (*(short*)(ctrl + DLGDEF_W) - *(int*)((BYTE*)newDef + DEF_WIDTH)) / 2;
+                    int dy = (*(short*)(ctrl + DLGDEF_H) - *(int*)((BYTE*)newDef + DEF_HEIGHT)) / 2;
+                    if (dx < 0) dx = 0;
+                    if (dy < 0) dy = 0;
+                    static bool s_logged = false;
+                    if (!s_logged && newDef == g_cprsmall)
+                    {
+                        s_logged = true;
+                        Log("Ikona stwora: kontrolka %dx%d, obrazek %dx%d, przesuniecie %d,%d",
+                            *(short*)(ctrl + DLGDEF_W), *(short*)(ctrl + DLGDEF_H),
+                            *(int*)((BYTE*)newDef + DEF_WIDTH), *(int*)((BYTE*)newDef + DEF_HEIGHT), dx, dy);
+                    }
                     int oldFrame = *(int*)(ctrl + DLGDEF_FRAME);
                     *(void**)(ctrl + DLGDEF_DEF) = newDef;
                     *(int*)(ctrl + DLGDEF_FRAME) = newFrame;
+                    x += (short)dx;
+                    y += (short)dy;
                     g_origDefDraw(ctrl);
+                    x -= (short)dx;
+                    y -= (short)dy;
                     *(void**)(ctrl + DLGDEF_DEF) = def;
                     *(int*)(ctrl + DLGDEF_FRAME) = oldFrame;
                     return;
@@ -1142,13 +1813,38 @@ static void __fastcall HeroInitHook(void* hero, void* /*edx*/, int heroId)
         g_heroPicture[heroId] = ((BYTE*)hero)[HERO_PICTURE];
         if (heroId >= 156) Log("Portret bohatera id=%d: indeks %d", heroId, g_heroPicture[heroId]);
     }
-    ApplyStartExtras((BYTE*)hero, "nowy bohater");
+    ApplyStartExtras((BYTE*)hero, "nowy bohater", true);
+}
+
+// Starting army draw (0x4C93F0, __thiscall on the game: hero id, ?, single creature). The game
+// keeps heroes at game + 0x21620 + id * 0x492. With `single` set (a hero hired again after
+// losing his army) the game's one creature is kept.
+static const DWORD ADDR_ARMY_DRAW = 0x4C93F0;
+static const int   GAME_HEROES = 0x21620, HERO_SIZE = 0x492;
+typedef void(__thiscall* ArmyDrawFn)(void* game, int heroId, int unknown, int single);
+static ArmyDrawFn g_origArmyDraw = NULL;
+
+static void __fastcall ArmyDrawHook(BYTE* game, void* /*edx*/, int heroId, int unknown, int single)
+{
+    g_origArmyDraw(game, heroId, unknown, single);
+    if ((char)single) return;
+    const HeroConfig* h = FindHero(heroId);
+    if (!h || h->armyCount <= 0) return;
+    BYTE* hero = game + GAME_HEROES + heroId * HERO_SIZE;
+    if (*(int*)(hero + HERO_ID) != heroId) return;
+    SetStartArmy(hero, *h);
+    static bool s_logged[512];
+    if (heroId >= 0 && heroId < 512 && !s_logged[heroId])
+    {
+        s_logged[heroId] = true;
+        Log("Armia startowa ustawiona: id=%d", heroId);
+    }
 }
 
 static void __fastcall HeroMapSetupHook(void* hero, void* /*edx*/, void* mapData)
 {
     g_origHeroMapSetup(hero, mapData);
-    ApplyStartExtras((BYTE*)hero, "bohater z mapy");
+    ApplyStartExtras((BYTE*)hero, "bohater z mapy", false);
 }
 
 static int __fastcall SpellDamageHook(void* heroPtr, void* /*edx*/, int spell, int damage, void* target)
@@ -1232,7 +1928,17 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
     g_origSpellDamage = (SpellDamageFn)InstallHook(ADDR_SPELL_DAMAGE, PROLOGUE_SUB8, (void*)&SpellDamageHook, "obrazenia z czarow");
     g_origHeroInit = (HeroInitFn)InstallHook(ADDR_HERO_INIT, PROLOGUE_SUBC, (void*)&HeroInitHook, "tworzenie bohatera");
     g_origHeroMapSetup = (HeroMapSetupFn)InstallHook(ADDR_HERO_MAP_SETUP, PROLOGUE_SUB8, (void*)&HeroMapSetupHook, "bohater z edytora map");
+    bool anyArmy = false;
+    for (int i = 0; i < g_heroCount; ++i) if (g_heroes[i].armyCount > 0) anyArmy = true;
+    if (anyArmy)
+        g_origArmyDraw = (ArmyDrawFn)InstallHook(ADDR_ARMY_DRAW, PROLOGUE_SUB8, (void*)&ArmyDrawHook, "armia startowa");
     InstallIconHook();
+    for (int i = 0; i < g_heroCount; ++i)
+        if (g_heroes[i].specFrom == SPEC_BUILT && g_heroes[i].buildType == BUILD_CREATURE_FIXED && g_heroes[i].crSpeed)
+        {
+            g_origCreatureBonus = (CreatureBonusFn)InstallHook(ADDR_CREATURE_BONUS, PROLOGUE_SUB14, (void*)&CreatureBonusHook, "szybkosc stworow");
+            break;
+        }
     LoadCustomPortraitList();
     if (g_customCount > 0)
     {

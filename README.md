@@ -1,8 +1,8 @@
-# HotA Custom Heroes
+# HeroForge - custom heroes for HotA
 
-A mod for **Heroes of Might and Magic III: Horn of the Abyss 1.8.0** that lets you rework existing heroes: give them a new name and portrait, a different specialty (copied from any hero, built from scratch for any creature, spell, skill or resource, or a spell damage bonus for a school of magic), starting secondary skills, starting spells, starting army and starting primary stats. It comes with a GUI editor, **Hero Creator**.
+A mod for **Heroes of Might and Magic III: Horn of the Abyss 1.8.0** that lets you rework existing heroes: give them a new name and portrait, a different specialty (copied from any hero, built from scratch for any creature, spell, skill or resource, or a spell damage bonus for a school of magic), starting secondary skills, starting spells, starting army and starting primary stats. It comes with a GUI editor, `HeroForge.exe`.
 
-Example from `examples/bohaterowie.ini`: Vehr (normally *+350 Gold*) becomes an **Earth Magic** specialist, the way Adrienne is for Fire Magic. She gets the Earth Magic orb as her specialty icon, +50% damage for Earth Magic spells, Expert Earth Magic and Implosion at the start, and stats 0/0/2/3.
+Example from `examples/heroes.ini`: Vehr (normally *+350 Gold*) becomes an **Earth Magic** specialist, the way Adrienne is for Fire Magic. She gets the Earth Magic orb as her specialty icon, +50% damage for Earth Magic spells, Expert Earth Magic and Implosion at the start, and stats 0/0/2/3.
 
 ## Features
 
@@ -21,7 +21,7 @@ Example from `examples/bohaterowie.ini`: Vehr (normally *+350 Gold*) becomes an 
 - **Starting army**: up to 7 stacks, each with a count range (random in between). Previews show the first 3.
 - **Starting stats** (Attack/Defense/Power/Knowledge).
 - **Name** (up to 12 letters) and **portrait**: any image, cropped and scaled to the game's large (58x64) and small (48x32) portraits.
-- **Hero Creator** (`Kreator.exe`): edit all of the above without touching the ini file, in three tabs (Specialty, Skills & Spells, Army).
+- **HeroForge editor** (`HeroForge.exe`): edit all of the above without touching the ini file, in three tabs (Specialty, Skills & Spells, Army).
   - town filter, and each hero listed with class and specialty,
   - the hero's default stats, starting spell and army filled in,
   - a creature and its upgrade listed together for specialties ("Jotunns / Jotunn Warlords"),
@@ -43,15 +43,17 @@ Get the zip from [Releases](../../releases) and follow `INSTALL.txt`:
 
 1. Make a **copy** of your game folder and use the copy.
 2. Rename the game's `SMACKW32.DLL` to `smackw32_org.dll`.
-3. Copy `SMACKW32.DLL` and the `WlasniBohaterowie` folder from the zip into the game folder.
+3. Copy `SMACKW32.DLL` and the `HeroForge` folder from the zip into the game folder.
 4. Start a new game once (this writes the hero, specialty and portrait data the editor uses), then close it.
-5. Run `WlasniBohaterowie\Kreator.exe`, set up your heroes, click **Save**, and start the game.
+5. Run `HeroForge\HeroForge.exe`, set up your heroes, click **Save**, and start the game.
 
-To uninstall, delete `SMACKW32.DLL` and `WlasniBohaterowie`, then rename `smackw32_org.dll` back to `SMACKW32.DLL`.
+Updating from 1.2.0 or older (then called WlasniBohaterowie): replace `SMACKW32.DLL`, add the `HeroForge` folder and open `HeroForge.exe`. It imports your old `bohaterowie.ini` and custom portraits; click **Save**, then the old `WlasniBohaterowie` folder can be deleted.
+
+To uninstall, delete `SMACKW32.DLL` and `HeroForge`, then rename `smackw32_org.dll` back to `SMACKW32.DLL`.
 
 ## How it works
 
-HD Mod does not load Pack plugins in HotA mode. Instead, the mod ships a proxy `SMACKW32.DLL`, a library the game loads at startup. The proxy forwards all 61 exports to the original (`smackw32_org.dll`) and loads `WlasniBohaterowie\WlasniBohaterowie.dll`.
+HD Mod does not load Pack plugins in HotA mode. Instead, the mod ships a proxy `SMACKW32.DLL`, a library the game loads at startup. The proxy forwards all 61 exports to the original (`smackw32_org.dll`) and loads `HeroForge\HeroForge.dll`.
 
 Hook points in `h3hota.exe` (HotA 1.8.0), found with Ghidra:
 
@@ -71,17 +73,17 @@ Hook points in `h3hota.exe` (HotA 1.8.0), found with Ghidra:
 | `0x55AA10`, `0x55B1E0` | picture loaders (8-bit / screen format). Custom portraits are served through them |
 | hero `+0x34` | portrait index. HotA keeps its own `char*` table of portrait files by index, which the mod finds by scanning memory for a run starting with `HPL000Kn` |
 
-Config file: `WlasniBohaterowie\bohaterowie.ini` (the key names are Polish; the editor handles them). Log: `WlasniBohaterowie\WlasniBohaterowie.log` (also in Polish).
+Config file: `HeroForge\heroes.ini` (keys are listed at the top of the file; the editor writes it for you). Log: `HeroForge\HeroForge.log`.
 
 ## Building
 
 Requires Visual Studio 2022 or Build Tools with the C++ x86 tools. .NET Framework 4 (included with Windows) builds the editor.
 
 ```powershell
-.\build.ps1 -Version 1.2.0
+.\build.ps1 -Version 1.3.0
 ```
 
-The output is `dist\hota-custom-heroes-1.2.0.zip`. `tools/ghidra` holds the small Ghidra scripts used to find the addresses.
+The output is `dist\HeroForge-1.3.0.zip`. `tools/ghidra` holds the small Ghidra scripts used to find the addresses.
 
 ## Disclaimer
 

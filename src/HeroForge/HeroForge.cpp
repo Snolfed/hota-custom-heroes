@@ -1,5 +1,5 @@
-// WlasniBohaterowie - hero mod for HotA 1.8.0, loaded by the smackw32.dll proxy.
-// Configured in bohaterowie.ini next to this DLL. Per hero it can give:
+// HeroForge - hero mod for HotA 1.8.0, loaded by the smackw32.dll proxy.
+// Configured in heroes.ini next to this DLL. Per hero it can give:
 //   - a "+X% spell damage for a magic school" specialty,
 //   - starting secondary skills (at least the given level),
 //   - starting spells (plus a spell book).
@@ -99,11 +99,11 @@ enum { SCHOOL_AIR = 1, SCHOOL_FIRE = 2, SCHOOL_WATER = 4, SCHOOL_EARTH = 8, SCHO
 
 // Secondary skill names (ASCII, lower case, no spaces) in game id order.
 static const char* SKILL_NAMES[SKILL_COUNT] = {
-    "znajomoscterenu", "lucznictwo", "logistyka", "zwiad", "dyplomacja", "nawigacja",
-    "dowodzenie", "madrosc", "mistycyzm", "szczescie", "balistyka", "sokoleoko",
-    "nekromancja", "zarzadzanie", "magiaognia", "magiapowietrza", "magiawody", "magiaziemi",
-    "uczonosc", "taktyka", "artyleria", "nauka", "atak", "obrona",
-    "inteligencja", "czarnoksiestwo", "odpornosc", "pierwszapomoc"
+    "pathfinding", "archery", "logistics", "scouting", "diplomacy", "navigation",
+    "leadership", "wisdom", "mysticism", "luck", "ballistics", "eagleeye",
+    "necromancy", "estates", "firemagic", "airmagic", "watermagic", "earthmagic",
+    "scholar", "tactics", "artillery", "learning", "offense", "armorer",
+    "intelligence", "sorcery", "resistance", "firstaid"
 };
 
 struct HeroConfig
@@ -115,9 +115,9 @@ struct HeroConfig
     int skillOrder[2];            // first two skills listed, -1 = none; they replace the hero's
                                   // starting skills: 1st listed -> 2nd slot, 2nd listed -> 1st slot
     bool spell[SPELL_COUNT];
-    int firstSpell;               // first spell listed in "czary", -1 = none; replaces the hero's starting spell
-    bool spellsSet;               // "czary" given ("brak" = no starting spell at all)
-    int armyCount;                // starting army from "armia" (0 = game default)
+    int firstSpell;               // first spell listed in "spells", -1 = none; replaces the hero's starting spell
+    bool spellsSet;               // "spells" given ("none" = no starting spell at all)
+    int armyCount;                // starting army from "army" (0 = game default)
     int armyType[7], armyMin[7], armyMax[7];
     bool hasStats;
     int stats[4];                 // attack, defense, power, knowledge
@@ -135,13 +135,13 @@ struct HeroConfig
     int iconHero;                 // show this hero's specialty icon, -1 = no change
     int iconSkill;                // show this secondary skill's icon, -1 = no change
     int iconCreature;             // show this creature's small portrait, -1 = no change
-    bool iconAuto;                // no "ikona" key: picked once the game tables are loaded
+    bool iconAuto;                // no "icon" key: picked once the game tables are loaded
     int startBook;                // spell book at start: -1 = game default, 0 = no, 1 = yes
 };
 
 static const int SPEC_UNSET = -2;  // keep the hero's own specialty
 static const int SPEC_NONE = -1;   // no specialty effect (only this mod's bonuses)
-static const int SPEC_BUILT = -3;  // specialty built from "specjalizacja_typ" (+ its parameter keys)
+static const int SPEC_BUILT = -3;  // specialty built from "specialty_type" (+ its parameter keys)
 
 enum { BUILD_SKILL = 0, BUILD_CREATURE_LEVEL = 1, BUILD_RESOURCE = 2, BUILD_SPELL = 3,
        BUILD_CREATURE_FIXED = 4, BUILD_SPEED = 5 };
@@ -201,11 +201,11 @@ static int ParseSchools(const char* s)
     char buf[128];
     Normalize(s, buf, sizeof(buf));
     int flags = 0;
-    if (strstr(buf, "ziemi")) flags |= SCHOOL_EARTH;
-    if (strstr(buf, "ogie") || strstr(buf, "ognia")) flags |= SCHOOL_FIRE;
-    if (strstr(buf, "wod")) flags |= SCHOOL_WATER;
-    if (strstr(buf, "powietrz")) flags |= SCHOOL_AIR;
-    if (strstr(buf, "wszystk")) flags |= SCHOOL_ALL;
+    if (strstr(buf, "earth")) flags |= SCHOOL_EARTH;
+    if (strstr(buf, "fire")) flags |= SCHOOL_FIRE;
+    if (strstr(buf, "water")) flags |= SCHOOL_WATER;
+    if (strstr(buf, "air")) flags |= SCHOOL_AIR;
+    if (strstr(buf, "all")) flags |= SCHOOL_ALL;
     return flags;
 }
 
@@ -223,9 +223,9 @@ static int FindSkill(const char* name)
     return -1;
 }
 
-static const char* g_levelNames[4] = { "-", "Podstawowy", "Zaawansowany", "Ekspert" };
+static const char* g_levelNames[4] = { "-", "Basic", "Advanced", "Expert" };
 
-// "magiaziemi:3, madrosc:1" -> skill levels
+// "Earth Magic:3, Wisdom:1" -> skill levels
 static void ParseSkills(const char* section, const char* text, HeroConfig& h)
 {
     char buf[512];
@@ -242,7 +242,7 @@ static void ParseSkills(const char* section, const char* text, HeroConfig& h)
         int skill = FindSkill(tok);
         if (skill < 0 || level < 1 || level > 3)
         {
-            Log("[%s] nieznana umiejetnosc albo poziom: '%s'", section, tok);
+            Log("[%s] unknown skill or level: '%s'", section, tok);
             continue;
         }
         h.skillLevel[skill] = (char)level;
@@ -252,12 +252,12 @@ static void ParseSkills(const char* section, const char* text, HeroConfig& h)
     }
 }
 
-// "18, 23" or "implozja, 23" -> spells
+// "18, 23" or "implosion, 23" -> spells
 static void ParseSpells(const char* section, const char* text, HeroConfig& h)
 {
     char buf[512];
     lstrcpynA(buf, text, sizeof(buf));
-    char* comment = strchr(buf, ';');   // "czary = 23   ; Meteor Shower"
+    char* comment = strchr(buf, ';');   // "spells = 23   ; Meteor Shower"
     if (comment) *comment = 0;
     for (char* tok = strtok(buf, ", "); tok; tok = strtok(NULL, ", "))
     {
@@ -266,13 +266,13 @@ static void ParseSpells(const char* section, const char* text, HeroConfig& h)
         if (!name[0]) continue;
         h.spellsSet = true;
         h.hasStartExtras = true;
-        if (strcmp(name, "brak") == 0) continue;
+        if (strcmp(name, "none") == 0) continue;
         int spell = -1;
         if (name[0] >= '0' && name[0] <= '9') spell = atoi(name);
-        else if (strcmp(name, "implozja") == 0) spell = 18;
+        else if (strcmp(name, "implosion") == 0) spell = 18;
         if (spell < 0 || spell >= SPELL_COUNT)
         {
-            Log("[%s] nieznany czar: '%s'", section, tok);
+            Log("[%s] unknown spell: '%s'", section, tok);
             continue;
         }
         h.spell[spell] = true;
@@ -295,7 +295,7 @@ static void ParseArmy(const char* section, const char* text, HeroConfig& h)
         if (n == 2) hi = lo;
         if (n < 2 || creature < 0 || creature >= 1000 || lo < 1 || hi < lo || hi > 9999)
         {
-            Log("[%s] zly oddzial armii: '%s' (format stwor:liczba albo stwor:min-max)", section, tok);
+            Log("[%s] bad army stack: '%s' (use creature:count or creature:min-max)", section, tok);
             continue;
         }
         h.armyType[h.armyCount] = creature;
@@ -314,7 +314,7 @@ static void ParseStats(const char* section, const char* text, HeroConfig& h)
     if (sscanf(text, "%d/%d/%d/%d", &a, &d, &p, &k) != 4 ||
         a < 0 || d < 0 || p < 1 || k < 1 || a > 99 || d > 99 || p > 99 || k > 99)
     {
-        Log("[%s] zle statystyki: '%s' (format A/O/M/W, np. 1/1/1/2; moc i wiedza min. 1, max 99)", section, text);
+        Log("[%s] bad stats: '%s' (use A/D/P/K, e.g. 1/1/1/2; power and knowledge at least 1, max 99)", section, text);
         return;
     }
     h.stats[0] = a; h.stats[1] = d; h.stats[2] = p; h.stats[3] = k;
@@ -335,11 +335,11 @@ static int MagicSkillOf(int schools)
 static void LoadConfig()
 {
     char ini[MAX_PATH];
-    wsprintfA(ini, "%s\\bohaterowie.ini", g_dir);
+    wsprintfA(ini, "%s\\heroes.ini", g_dir);
     for (int i = 1; i <= MAX_HEROES && g_heroCount < MAX_HEROES; ++i)
     {
         char section[32], text[512];
-        wsprintfA(section, "Bohater%d", i);
+        wsprintfA(section, "Hero%d", i);
         int id = GetPrivateProfileIntA(section, "id", -1, ini);
         if (id < 0) continue;
 
@@ -348,83 +348,83 @@ static void LoadConfig()
         h.id = id;
         h.firstSpell = -1;
         h.skillOrder[0] = h.skillOrder[1] = -1;
-        GetPrivateProfileStringA(section, "szkola", "", text, sizeof(text), ini);
+        GetPrivateProfileStringA(section, "school", "", text, sizeof(text), ini);
         h.schools = ParseSchools(text);
         h.percent = GetPrivateProfileIntA(section, "bonus", 0, ini);
-        GetPrivateProfileStringA(section, "umiejetnosci", "", text, sizeof(text), ini);
+        GetPrivateProfileStringA(section, "skills", "", text, sizeof(text), ini);
         ParseSkills(section, text, h);
-        GetPrivateProfileStringA(section, "czary", "", text, sizeof(text), ini);
+        GetPrivateProfileStringA(section, "spells", "", text, sizeof(text), ini);
         ParseSpells(section, text, h);
-        GetPrivateProfileStringA(section, "statystyki", "", text, sizeof(text), ini);
+        GetPrivateProfileStringA(section, "stats", "", text, sizeof(text), ini);
         ParseStats(section, text, h);
-        GetPrivateProfileStringA(section, "armia", "", text, sizeof(text), ini);
+        GetPrivateProfileStringA(section, "army", "", text, sizeof(text), ini);
         ParseArmy(section, text, h);
 
         bool hasBonus = h.schools != 0 && h.percent != 0;
         h.specFrom = SPEC_UNSET;
-        GetPrivateProfileStringA(section, "specjalizacja", "", text, sizeof(text), ini);
+        GetPrivateProfileStringA(section, "specialty", "", text, sizeof(text), ini);
         char spec[64];
         Normalize(text, spec, sizeof(spec));
         if (spec[0] >= '0' && spec[0] <= '9') h.specFrom = atoi(spec);
-        else if (strcmp(spec, "brak") == 0) h.specFrom = SPEC_NONE;
-        else if (spec[0] && strcmp(spec, "wlasna") != 0)
-            Log("[%s] nieznana specjalizacja: '%s' (podaj numer bohatera, 'brak' albo 'wlasna')", section, text);
-        // Built specialty: "specjalizacja_typ" = stwor (fixed bonus, the default when only
-        // "stwor" is given) / stwor_poziom / czar / umiejetnosc / surowiec / szybkosc, with
-        // "stwor" (+ stwor_atak/obrona/obrazenia/szybkosc), "spec_czar", "spec_umiejetnosc"
-        // or "spec_surowiec" as its parameter.
-        h.crAttack = GetPrivateProfileIntA(section, "stwor_atak", 0, ini);
-        h.crDefense = GetPrivateProfileIntA(section, "stwor_obrona", 0, ini);
-        h.crDamage = GetPrivateProfileIntA(section, "stwor_obrazenia", 0, ini);
-        h.crSpeed = GetPrivateProfileIntA(section, "stwor_szybkosc", 0, ini);
-        int creature = GetPrivateProfileIntA(section, "stwor", -1, ini);
-        GetPrivateProfileStringA(section, "specjalizacja_typ", "", text, sizeof(text), ini);
+        else if (strcmp(spec, "none") == 0) h.specFrom = SPEC_NONE;
+        else if (spec[0] && strcmp(spec, "own") != 0)
+            Log("[%s] unknown specialty: '%s' (use a hero number, 'none' or 'own')", section, text);
+        // Built specialty: "specialty_type" = creature (fixed bonus, the default when only
+        // "creature" is given) / creature_level / spell / skill / resource / speed, with
+        // "creature" (+ creature_attack/defense/damage/speed), "specialty_spell", "specialty_skill"
+        // or "specialty_resource" as its parameter.
+        h.crAttack = GetPrivateProfileIntA(section, "creature_attack", 0, ini);
+        h.crDefense = GetPrivateProfileIntA(section, "creature_defense", 0, ini);
+        h.crDamage = GetPrivateProfileIntA(section, "creature_damage", 0, ini);
+        h.crSpeed = GetPrivateProfileIntA(section, "creature_speed", 0, ini);
+        int creature = GetPrivateProfileIntA(section, "creature", -1, ini);
+        GetPrivateProfileStringA(section, "specialty_type", "", text, sizeof(text), ini);
         char kind[32];
         Normalize(text, kind, sizeof(kind));
         h.buildType = -1;
         h.buildTemplate = -1;
-        if (strcmp(kind, "stwor_poziom") == 0 || strcmp(kind, "stworpoziom") == 0) { h.buildType = BUILD_CREATURE_LEVEL; h.buildParam = creature; }
-        else if (strcmp(kind, "czar") == 0) { h.buildType = BUILD_SPELL; h.buildParam = GetPrivateProfileIntA(section, "spec_czar", -1, ini); }
-        else if (strcmp(kind, "umiejetnosc") == 0)
+        if (strcmp(kind, "creaturelevel") == 0) { h.buildType = BUILD_CREATURE_LEVEL; h.buildParam = creature; }
+        else if (strcmp(kind, "spell") == 0) { h.buildType = BUILD_SPELL; h.buildParam = GetPrivateProfileIntA(section, "specialty_spell", -1, ini); }
+        else if (strcmp(kind, "skill") == 0)
         {
-            GetPrivateProfileStringA(section, "spec_umiejetnosc", "", text, sizeof(text), ini);
+            GetPrivateProfileStringA(section, "specialty_skill", "", text, sizeof(text), ini);
             h.buildType = BUILD_SKILL;
             h.buildParam = FindSkill(text);
         }
-        else if (strcmp(kind, "surowiec") == 0) { h.buildType = BUILD_RESOURCE; h.buildParam = GetPrivateProfileIntA(section, "spec_surowiec", -1, ini); }
-        else if (strcmp(kind, "szybkosc") == 0) { h.buildType = BUILD_SPEED; h.buildParam = 2; }
+        else if (strcmp(kind, "resource") == 0) { h.buildType = BUILD_RESOURCE; h.buildParam = GetPrivateProfileIntA(section, "specialty_resource", -1, ini); }
+        else if (strcmp(kind, "speed") == 0) { h.buildType = BUILD_SPEED; h.buildParam = 2; }
         else if (creature >= 0) { h.buildType = BUILD_CREATURE_FIXED; h.buildParam = creature; }
         if (h.buildType >= 0 && h.buildParam < 0)
         {
-            Log("[%s] specjalizacja '%s' bez parametru - pominieta", section, kind);
+            Log("[%s] specialty '%s' without its parameter - skipped", section, kind);
             h.buildType = -1;
         }
         if (h.buildType >= 0) h.specFrom = SPEC_BUILT;
-        // A school bonus without any "specjalizacja" key replaces the hero's own specialty.
+        // A school bonus without any "specialty" key replaces the hero's own specialty.
         else if (!spec[0] && hasBonus) h.specFrom = SPEC_NONE;
 
-        // Spell book at start: "ksiega = tak / nie" (absent = game default).
-        GetPrivateProfileStringA(section, "ksiega", "", text, sizeof(text), ini);
+        // Spell book at start: "spellbook = yes / no" (absent = game default).
+        GetPrivateProfileStringA(section, "spellbook", "", text, sizeof(text), ini);
         Normalize(text, kind, sizeof(kind));
-        h.startBook = strcmp(kind, "tak") == 0 ? 1 : strcmp(kind, "nie") == 0 ? 0 : -1;
+        h.startBook = strcmp(kind, "yes") == 0 ? 1 : strcmp(kind, "no") == 0 ? 0 : -1;
         if (h.startBook >= 0) h.hasStartExtras = true;
-        GetPrivateProfileStringA(section, "imie", "", h.name, sizeof(h.name), ini);
-        GetPrivateProfileStringA(section, "nazwa_specjalizacji", "", h.specName, sizeof(h.specName), ini);
-        GetPrivateProfileStringA(section, "opis_specjalizacji", "", h.specDesc, sizeof(h.specDesc), ini);
-        // Icon: "ikona = <hero id>" or "ikona = <skill name>"; by default the copied hero's icon,
+        GetPrivateProfileStringA(section, "name", "", h.name, sizeof(h.name), ini);
+        GetPrivateProfileStringA(section, "specialty_name", "", h.specName, sizeof(h.specName), ini);
+        GetPrivateProfileStringA(section, "specialty_description", "", h.specDesc, sizeof(h.specDesc), ini);
+        // Icon: "icon = <hero id>" or "icon = <skill name>"; by default the copied hero's icon,
         // or for a school bonus without a specialty the magic skill icon (like Adrienne's Fire Magic).
         h.iconHero = -1;
         h.iconSkill = -1;
         h.iconCreature = -1;
         h.iconAuto = false;
-        GetPrivateProfileStringA(section, "ikona", "", text, sizeof(text), ini);
+        GetPrivateProfileStringA(section, "icon", "", text, sizeof(text), ini);
         char icon[64];
         Normalize(text, icon, sizeof(icon));
         if (icon[0] >= '0' && icon[0] <= '9') h.iconHero = atoi(icon);
-        else if (icon[0] && strcmp(icon, "wlasna") != 0)
+        else if (icon[0] && strcmp(icon, "own") != 0)
         {
             h.iconSkill = FindSkill(icon);
-            if (h.iconSkill < 0) Log("[%s] nieznana ikona: '%s'", section, text);
+            if (h.iconSkill < 0) Log("[%s] unknown icon: '%s'", section, text);
         }
         else if (!icon[0])
         {
@@ -452,32 +452,32 @@ static void LoadConfig()
 
         if (!hasBonus && !h.hasStartExtras && h.specFrom == SPEC_UNSET && !h.specName[0] && !h.specDesc[0] && !h.name[0])
         {
-            Log("[%s] pominiety: nic do zmiany", section);
+            Log("[%s] skipped: nothing to change", section);
             continue;
         }
-        Log("[%s] bohater id=%d, szkoly=0x%X, bonus=%d%%", section, h.id, h.schools, h.percent);
-        if (h.specFrom >= 0) Log("    specjalizacja skopiowana od bohatera id=%d", h.specFrom);
-        if (h.specFrom == SPEC_NONE) Log("    oryginalna specjalizacja wylaczona");
+        Log("[%s] hero id=%d, schools=0x%X, bonus=%d%%", section, h.id, h.schools, h.percent);
+        if (h.specFrom >= 0) Log("    specialty copied from hero id=%d", h.specFrom);
+        if (h.specFrom == SPEC_NONE) Log("    own specialty turned off");
         if (h.specFrom == SPEC_BUILT)
-            Log("    nowa specjalizacja: typ %d, parametr %d (stwor: atak %d, obrona %d, obrazenia %d, szybkosc %d)",
+            Log("    new specialty: type %d, parameter %d (creature: attack %d, defense %d, damage %d, speed %d)",
                 h.buildType, h.buildParam, h.crAttack, h.crDefense, h.crDamage, h.crSpeed);
-        if (h.startBook >= 0) Log("    ksiega na start: %s", h.startBook ? "tak" : "nie");
-        if (h.name[0]) Log("    nowe imie: %s", h.name);
-        if (h.specName[0]) Log("    nazwa specjalizacji: %s", h.specName);
-        if (h.iconHero >= 0) Log("    ikona specjalizacji bohatera id=%d", h.iconHero);
-        if (h.iconSkill >= 0) Log("    ikona umiejetnosci %s", SKILL_NAMES[h.iconSkill]);
+        if (h.startBook >= 0) Log("    spell book at start: %s", h.startBook ? "yes" : "no");
+        if (h.name[0]) Log("    new name: %s", h.name);
+        if (h.specName[0]) Log("    specialty name: %s", h.specName);
+        if (h.iconHero >= 0) Log("    specialty icon of hero id=%d", h.iconHero);
+        if (h.iconSkill >= 0) Log("    skill icon %s", SKILL_NAMES[h.iconSkill]);
         for (int s = 0; s < SKILL_COUNT; ++s)
-            if (h.skillLevel[s]) Log("    umiejetnosc %s: %s", SKILL_NAMES[s], g_levelNames[h.skillLevel[s]]);
+            if (h.skillLevel[s]) Log("    skill %s: %s", SKILL_NAMES[s], g_levelNames[h.skillLevel[s]]);
         for (int s = 0; s < SPELL_COUNT; ++s)
-            if (h.spell[s]) Log("    czar %d", s);
-        if (h.spellsSet && h.firstSpell < 0) Log("    bez czaru startowego");
+            if (h.spell[s]) Log("    spell %d", s);
+        if (h.spellsSet && h.firstSpell < 0) Log("    no starting spell");
         for (int s = 0; s < h.armyCount; ++s)
-            Log("    armia: stwor %d x %d-%d", h.armyType[s], h.armyMin[s], h.armyMax[s]);
+            Log("    army: creature %d x %d-%d", h.armyType[s], h.armyMin[s], h.armyMax[s]);
         if (h.hasStats)
-            Log("    statystyki %d/%d/%d/%d", h.stats[0], h.stats[1], h.stats[2], h.stats[3]);
+            Log("    stats %d/%d/%d/%d", h.stats[0], h.stats[1], h.stats[2], h.stats[3]);
         ++g_heroCount;
     }
-    Log("Wczytano %d bohaterow z %s", g_heroCount, ini);
+    Log("Loaded %d heroes from %s", g_heroCount, ini);
 }
 
 static const HeroConfig* FindHero(int id)
@@ -536,7 +536,7 @@ static void ApplyStartExtras(BYTE* hero, const char* when, bool newHero)
         hero[HERO_SPELLS_B + s] = 1;
         anySpell = true;
     }
-    // Spell book: "ksiega = tak" gives one, "nie" takes it away; otherwise starting spells bring one.
+    // Spell book: "spellbook = yes" gives one, "no" takes it away; otherwise starting spells bring one.
     int& book = *(int*)(hero + HERO_SPELLBOOK_SLOT);
     if (h->startBook == 1 || (anySpell && h->startBook != 0))
     {
@@ -566,7 +566,7 @@ static void ApplyStartExtras(BYTE* hero, const char* when, bool newHero)
         s_logged[h->id] = true;
         char name[13];
         SafeHeroName(hero, name);
-        Log("Startowe umiejetnosci/czary nadane: id=%d (%s) [%s]", h->id, name, when);
+        Log("Starting skills/spells given: id=%d (%s) [%s]", h->id, name, when);
     }
 }
 
@@ -577,7 +577,7 @@ static void CleanText(const char* in, char* out, int size);
 static void DumpHeroList()
 {
     char path[MAX_PATH];
-    wsprintfA(path, "%s\\lista_bohaterow.txt", g_dir);
+    wsprintfA(path, "%s\\game_heroes.txt", g_dir);
     FILE* f = fopen(path, "w");
     if (!f) return;
     // "id;name;class id;class name;town id;A/D/P/K;portrait files;spell;book;army" (class -1 / town -1 when
@@ -636,7 +636,7 @@ static void DumpHeroList()
         ++count;
     }
     fclose(f);
-    Log("Zapisano liste %d bohaterow do %s", count, path);
+    Log("Wrote the list of %d heroes to %s", count, path);
 }
 
 // ---- specialties ----
@@ -680,7 +680,7 @@ static void CleanText(const char* in, char* out, int size)
 static void DumpSpecialtyList()
 {
     char path[MAX_PATH];
-    wsprintfA(path, "%s\\lista_specjalizacji.txt", g_dir);
+    wsprintfA(path, "%s\\game_specialties.txt", g_dir);
     FILE* f = fopen(path, "w");
     if (!f) return;
     for (int id = 0; id < g_specCount; ++id)
@@ -692,7 +692,7 @@ static void DumpSpecialtyList()
         fprintf(f, "%d;%d;%d;%s;%s\n", id, *(const int*)(e + SPEC_TYPE), *(const int*)(e + SPEC_BONUS), shortText, desc);
     }
     fclose(f);
-    Log("Zapisano liste %d specjalizacji do %s", g_specCount, path);
+    Log("Wrote the list of %d specialties to %s", g_specCount, path);
 }
 
 static void BuildSpecEntry(const HeroConfig& h, BYTE* out)
@@ -791,7 +791,7 @@ static void ApplySpecialties(bool logChanges)
                 memcpy(type, wanted, HERO_TYPE_SIZE);
                 VirtualProtect(type, HERO_TYPE_SIZE, old, &old);
                 if (logChanges)
-                    Log("Start bohatera id=%d: czar %d, umiejetnosci %d:%d, %d:%d", h.id,
+                    Log("Hero id=%d starts with: spell %d, skills %d:%d, %d:%d", h.id,
                         *(int*)(wanted + HERO_TYPE_SPELL),
                         *(int*)(wanted + HERO_TYPE_SKILL1), *(int*)(wanted + HERO_TYPE_SKILL1 + 4),
                         *(int*)(wanted + HERO_TYPE_SKILL2), *(int*)(wanted + HERO_TYPE_SKILL2 + 4));
@@ -808,7 +808,7 @@ static void ApplySpecialties(bool logChanges)
         VirtualProtect(entry, SPEC_SIZE, PAGE_READWRITE, &old);
         memcpy(entry, wanted, SPEC_SIZE);
         VirtualProtect(entry, SPEC_SIZE, old, &old);
-        if (logChanges) Log("Specjalizacja ustawiona: id=%d (typ %d, parametr %d)", h.id, *(int*)(wanted + SPEC_TYPE), *(int*)(wanted + SPEC_BONUS));
+        if (logChanges) Log("Specialty set: id=%d (type %d, parameter %d)", h.id, *(int*)(wanted + SPEC_TYPE), *(int*)(wanted + SPEC_BONUS));
     }
 }
 
@@ -839,7 +839,7 @@ static void DumpCreatureList()
 {
     const BYTE* table = *(const BYTE* volatile*)ADDR_CREATURES_PTR;
     char path[MAX_PATH];
-    wsprintfA(path, "%s\\lista_stworow.txt", g_dir);
+    wsprintfA(path, "%s\\game_creatures.txt", g_dir);
     FILE* f = fopen(path, "w");
     if (!f || !table) { if (f) fclose(f); return; }
     int count = 0;
@@ -855,7 +855,7 @@ static void DumpCreatureList()
         ++count;
     }
     fclose(f);
-    Log("Zapisano liste %d stworow do %s", count, path);
+    Log("Wrote the list of %d creatures to %s", count, path);
 }
 
 static const char* SKILL_NAMES_EN[SKILL_COUNT] = {
@@ -925,7 +925,7 @@ static void FillBuiltSpecialties()
         if (creatureKind)
         {
             int base = CreatureBase(h.buildParam);
-            if (base != h.buildParam) Log("Stwor %d to ulepszenie, specjalizacja na %d (oba)", h.buildParam, base);
+            if (base != h.buildParam) Log("Creature %d is an upgrade, specialty set on %d (both)", h.buildParam, base);
             h.buildParam = base;
         }
 
@@ -955,7 +955,7 @@ static void FillBuiltSpecialties()
         {
             if (!h.specName[0]) lstrcpynA(h.specName, SpecOriginalText(h.buildTemplate, SPEC_SHORT), sizeof(h.specName));
             if (!h.specDesc[0]) lstrcpynA(h.specDesc, SpecOriginalText(h.buildTemplate, SPEC_DESC), sizeof(h.specDesc));
-            Log("Specjalizacja id=%d jak u bohatera %d (teksty, ikona)", h.id, h.buildTemplate);
+            Log("Specialty of id=%d like hero %d (texts, icon)", h.id, h.buildTemplate);
             continue;
         }
 
@@ -1090,7 +1090,7 @@ static DWORD WINAPI SpecialtyThread(LPVOID)
         g_specCount = count;
         snapTable = spec;
         snapCount = count;
-        Log("Tablica specjalizacji gotowa: %d bohaterow", count);
+        Log("Specialty table ready: %d heroes", count);
         DumpHeroList();
         DumpSpecialtyList();
         DumpCreatureList();
@@ -1136,7 +1136,7 @@ static int SkillIconFrame(int skill) { return 3 + skill * 3 + 2; }
 // ---- portrait export for the editor ----
 // HotA keeps hero portraits in its encrypted archive; the only reliable way to get them is
 // through the game's own loader. Once the hero table has portrait names, every large portrait
-// is loaded (on the game thread, from the draw hook) and saved as portrety\<id>.bmp.
+// is loaded (on the game thread, from the draw hook) and saved as portraits\<id>.bmp.
 
 // bpp: 32 = BGRA, 16 = RGB565, 8 = palette indices into `rgb` (256 x RGB).
 static void SaveBmp(const char* path, int w, int h, int scan, int bpp, const BYTE* pixels, const BYTE* rgb)
@@ -1262,7 +1262,7 @@ static void FindPortraitTable()
     DWORD* refs = g_foundRefs;
     int refCount = g_foundRefCount;
     std::sort(refs, refs + refCount);
-    Log("Portrety: %d napisow HPL, %d wskaznikow", g_foundStringCount, refCount);
+    Log("Portraits: %d HPL strings, %d pointers", g_foundStringCount, refCount);
 
     // The table is a plain char* array (stride 4) starting "HPL000Kn", "HPL001Kn", ...; it also
     // holds names like "HCVC01.pcx", so its length counts every entry naming a .pcx file.
@@ -1290,9 +1290,9 @@ static void FindPortraitTable()
         }
     }
     if (g_portraitTable)
-        Log("Tablica portretow: 0x%08X, %d pozycji", (DWORD)g_portraitTable, g_portraitCount);
+        Log("Portrait table: 0x%08X, %d entries", (DWORD)g_portraitTable, g_portraitCount);
     else
-        Log("Tablica portretow nie znaleziona");
+        Log("Portrait table not found");
 }
 
 // Large portrait file of a hero, by its portrait index.
@@ -1318,7 +1318,7 @@ static bool ExportPortraits()
 
     // Hero id -> large portrait file, for custom portraits on later launches.
     char mapPath[MAX_PATH];
-    wsprintfA(mapPath, "%s\\portrety_mapa.txt", g_dir);
+    wsprintfA(mapPath, "%s\\portrait_map.txt", g_dir);
     if (FILE* mf = fopen(mapPath, "w"))
     {
         for (int id = 0; id < count; ++id)
@@ -1330,7 +1330,7 @@ static bool ExportPortraits()
     }
 
     char dir[MAX_PATH];
-    wsprintfA(dir, "%s\\portrety", g_dir);
+    wsprintfA(dir, "%s\\portraits", g_dir);
     CreateDirectoryA(dir, NULL);
     typedef BYTE* (__fastcall* LoadPcxFn)(const char* name);
     LoadPcxFn LoadPcx = (LoadPcxFn)ADDR_LOAD_PCX8;
@@ -1354,14 +1354,14 @@ static bool ExportPortraits()
         SaveBmp(path, w, h, scan, 32, pixels, NULL);
         ++saved;
     }
-    Log("Zapisano %d portretow do %s", saved, dir);
+    Log("Saved %d portraits to %s", saved, dir);
     return true;
 }
 
 // ---- custom portraits ----
-// The editor writes portrety_wlasne\<id>_L.bmp (58x64) and <id>_S.bmp (48x32), 24-bit.
+// The editor writes custom_portraits\<id>_L.bmp (58x64) and <id>_S.bmp (48x32), 24-bit.
 // When the game asks either picture loader for that hero's portrait file (names from
-// portrety_mapa.txt; small = "HPS" instead of "HPL"), it gets a copy of a true-colour HotA
+// portrait_map.txt; small = "HPS" instead of "HPL"), it gets a copy of a true-colour HotA
 // portrait object of the same size (HPL179/HPS179) with the pixels replaced.
 
 typedef void* (__fastcall* LoadPicFn)(const char* name);
@@ -1386,7 +1386,7 @@ static int g_customCount = 0;
 static void LoadCustomPortraitList()
 {
     char path[MAX_PATH], line[128];
-    wsprintfA(path, "%s\\portrety_mapa.txt", g_dir);
+    wsprintfA(path, "%s\\portrait_map.txt", g_dir);
     FILE* f = fopen(path, "r");
     if (!f) return;
     while (fgets(line, sizeof(line), f) && g_customCount < 64)
@@ -1395,7 +1395,7 @@ static void LoadCustomPortraitList()
         char name[32];
         if (sscanf(line, "%d;%31[^\r\n]", &id, name) != 2) continue;
         char bmp[MAX_PATH];
-        wsprintfA(bmp, "%s\\portrety_wlasne\\%d_L.bmp", g_dir, id);
+        wsprintfA(bmp, "%s\\custom_portraits\\%d_L.bmp", g_dir, id);
         if (GetFileAttributesA(bmp) == INVALID_FILE_ATTRIBUTES) continue;
         CustomPortrait& c = g_custom[g_customCount++];
         memset(&c, 0, sizeof(c));
@@ -1403,7 +1403,7 @@ static void LoadCustomPortraitList()
         lstrcpynA(c.file[0], name, 16);
         lstrcpynA(c.file[1], name, 16);
         c.file[1][2] = (c.file[1][2] == 'l') ? 's' : 'S';   // HPL... -> HPS...
-        Log("Wlasny portret bohatera id=%d (%s / %s)", id, c.file[0], c.file[1]);
+        Log("Custom portrait for hero id=%d (%s / %s)", id, c.file[0], c.file[1]);
     }
     fclose(f);
 }
@@ -1448,10 +1448,10 @@ static BYTE* BuildCustomPortrait(CustomPortrait& c, int size, int loader)
     BYTE* obj = (BYTE*)VirtualAlloc(NULL, PCX_OBJECT_COPY, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     BYTE* pixels = (BYTE*)VirtualAlloc(NULL, scan * h, MEM_COMMIT | MEM_RESERVE, PAGE_READWRITE);
     char bmp[MAX_PATH];
-    wsprintfA(bmp, "%s\\portrety_wlasne\\%d_%c.bmp", g_dir, c.id, size == 0 ? 'L' : 'S');
+    wsprintfA(bmp, "%s\\custom_portraits\\%d_%c.bmp", g_dir, c.id, size == 0 ? 'L' : 'S');
     if (!obj || !pixels || !ReadBmp24(bmp, w, h, scan, pixels))
     {
-        Log("BLAD: wlasny portret %s nie pasuje (potrzebny 24-bit BMP %dx%d)", bmp, w, h);
+        Log("ERROR: custom portrait %s does not fit (needs a 24-bit BMP %dx%d)", bmp, w, h);
         return NULL;
     }
     memcpy(obj, donor, PCX_OBJECT_COPY);
@@ -1586,7 +1586,7 @@ static const ScaledIcon* GetScaledCreatureIcon(BYTE* realCtrl, int creature, int
     int srcW = def ? *(int*)((BYTE*)def + DEF_WIDTH) : 0, srcH = def ? *(int*)((BYTE*)def + DEF_HEIGHT) : 0;
     if (srcW <= 0 || srcH <= 0 || srcW > 1024 || srcH > 1024 || DefFrameCount(def, group) <= 0)
     {
-        Log("Ikona stwora %d: brak animacji %s", creature, defName);
+        Log("Creature icon %d: no animation %s", creature, defName);
         return NULL;
     }
     BYTE* dark = (BYTE*)malloc(srcW * srcH * bpp);
@@ -1612,7 +1612,7 @@ static const ScaledIcon* GetScaledCreatureIcon(BYTE* realCtrl, int creature, int
     free(light);
     if (right < 0)
     {
-        Log("Ikona stwora %d (%s): rysowanie do bufora nie zadzialalo, zostaje maly portret", creature, defName);
+        Log("Creature icon %d (%s): drawing to the buffer failed, using the small portrait", creature, defName);
         free(dark);
         free(solid);
         return NULL;
@@ -1664,7 +1664,7 @@ static const ScaledIcon* GetScaledCreatureIcon(BYTE* realCtrl, int creature, int
     icon.w = size;
     icon.h = size;
     icon.failed = false;
-    Log("Ikona stwora %d: %s (%dx%d) -> %dx%d w %dx%d, bez tla", creature, defName, cw, ch, w, h, size, size);
+    Log("Creature icon %d: %s (%dx%d) -> %dx%d in %dx%d", creature, defName, cw, ch, w, h, size, size);
     return &icon;
 }
 
@@ -1723,7 +1723,7 @@ static void __fastcall DefDrawHook(BYTE* ctrl)
             g_secskill = LoadDef("secskill.def");
             g_secsk32 = LoadDef("secsk32.def");
             g_cprsmall = LoadDef("cprsmall.def");
-            Log("Ikony: un44 %d klatek, un32 %d, secskill %d, secsk32 %d, cprsmall %d", DefFrameCount(g_un44, 0),
+            Log("Icons: un44 %d frames, un32 %d, secskill %d, secsk32 %d, cprsmall %d", DefFrameCount(g_un44, 0),
                 DefFrameCount(g_un32, 0), DefFrameCount(g_secskill, 0), DefFrameCount(g_secsk32, 0), DefFrameCount(g_cprsmall, 0));
         }
         void* def = *(void**)(ctrl + DLGDEF_DEF);
@@ -1763,7 +1763,7 @@ static void __fastcall DefDrawHook(BYTE* ctrl)
                     if (!s_logged && newDef == g_cprsmall)
                     {
                         s_logged = true;
-                        Log("Ikona stwora: kontrolka %dx%d, obrazek %dx%d, przesuniecie %d,%d",
+                        Log("Creature icon: control %dx%d, picture %dx%d, offset %d,%d",
                             *(short*)(ctrl + DLGDEF_W), *(short*)(ctrl + DLGDEF_H),
                             *(int*)((BYTE*)newDef + DEF_WIDTH), *(int*)((BYTE*)newDef + DEF_HEIGHT), dx, dy);
                     }
@@ -1794,7 +1794,7 @@ static void InstallIconHook()
     DWORD* slot = (DWORD*)ADDR_DLGDEF_VTABLE + DLGDEF_VT_DRAW;
     if (*slot != 0x4EAC20)
     {
-        Log("BLAD: metoda rysowania obrazkow ma inny adres niz oczekiwany (0x%08X). Ikony wylaczone.", *slot);
+        Log("ERROR: the picture draw method is not where expected (0x%08X). Icons turned off.", *slot);
         return;
     }
     g_origDefDraw = (DefDrawFn)*slot;
@@ -1802,7 +1802,7 @@ static void InstallIconHook()
     VirtualProtect(slot, 4, PAGE_READWRITE, &old);
     *slot = (DWORD)&DefDrawHook;
     VirtualProtect(slot, 4, old, &old);
-    Log("Hook zainstalowany: ikony specjalizacji (vtable 0x%08X)", (DWORD)slot);
+    Log("Hook installed: specialty icons (vtable 0x%08X)", (DWORD)slot);
 }
 
 static void __fastcall HeroInitHook(void* hero, void* /*edx*/, int heroId)
@@ -1811,9 +1811,9 @@ static void __fastcall HeroInitHook(void* hero, void* /*edx*/, int heroId)
     if (heroId >= 0 && heroId < 512 && g_heroPicture[heroId] < 0)
     {
         g_heroPicture[heroId] = ((BYTE*)hero)[HERO_PICTURE];
-        if (heroId >= 156) Log("Portret bohatera id=%d: indeks %d", heroId, g_heroPicture[heroId]);
+        if (heroId >= 156) Log("Portrait of hero id=%d: index %d", heroId, g_heroPicture[heroId]);
     }
-    ApplyStartExtras((BYTE*)hero, "nowy bohater", true);
+    ApplyStartExtras((BYTE*)hero, "new hero", true);
 }
 
 // Starting army draw (0x4C93F0, __thiscall on the game: hero id, ?, single creature). The game
@@ -1837,14 +1837,14 @@ static void __fastcall ArmyDrawHook(BYTE* game, void* /*edx*/, int heroId, int u
     if (heroId >= 0 && heroId < 512 && !s_logged[heroId])
     {
         s_logged[heroId] = true;
-        Log("Armia startowa ustawiona: id=%d", heroId);
+        Log("Starting army set: id=%d", heroId);
     }
 }
 
 static void __fastcall HeroMapSetupHook(void* hero, void* /*edx*/, void* mapData)
 {
     g_origHeroMapSetup(hero, mapData);
-    ApplyStartExtras((BYTE*)hero, "bohater z mapy", false);
+    ApplyStartExtras((BYTE*)hero, "map hero", false);
 }
 
 static int __fastcall SpellDamageHook(void* heroPtr, void* /*edx*/, int spell, int damage, void* target)
@@ -1860,7 +1860,7 @@ static int __fastcall SpellDamageHook(void* heroPtr, void* /*edx*/, int spell, i
         g_seenHero[id] = true;
         char name[13];
         SafeHeroName(hero, name);
-        Log("Czar rzucil bohater id=%d (%s)", id, name);
+        Log("Spell cast by hero id=%d (%s)", id, name);
     }
 
     const HeroConfig* h = FindHero(id);
@@ -1875,7 +1875,7 @@ static int __fastcall SpellDamageHook(void* heroPtr, void* /*edx*/, int spell, i
     if (s_logged < 20)
     {
         ++s_logged;
-        Log("Bonus +%d%% dla id=%d, czar %d: %d -> %d", h->percent, id, spell, result, boosted);
+        Log("Bonus +%d%% for id=%d, spell %d: %d -> %d", h->percent, id, spell, result, boosted);
     }
     return boosted;
 }
@@ -1888,8 +1888,8 @@ static void* InstallHook(DWORD address, const BYTE* expected, void* hook, const 
     BYTE* target = (BYTE*)address;
     if (memcmp(target, expected, len) != 0)
     {
-        Log("BLAD: kod gry pod 0x%08X (%s) jest inny niz oczekiwany (inna wersja HotA?). "
-            "Bajty: %02X %02X %02X %02X %02X %02X. Ta funkcja moda wylaczona.",
+        Log("ERROR: game code at 0x%08X (%s) is not what was expected (another HotA version?). "
+            "Bytes: %02X %02X %02X %02X %02X %02X. This part of the mod is turned off.",
             address, what, target[0], target[1], target[2], target[3], target[4], target[5]);
         return NULL;
     }
@@ -1907,7 +1907,7 @@ static void* InstallHook(DWORD address, const BYTE* expected, void* hook, const 
     for (int i = 5; i < len; ++i) target[i] = 0x90;
     VirtualProtect(target, len, old, &old);
     FlushInstructionCache(GetCurrentProcess(), target, len);
-    Log("Hook zainstalowany: %s (0x%08X)", what, address);
+    Log("Hook installed: %s (0x%08X)", what, address);
     return tramp;
 }
 
@@ -1920,30 +1920,30 @@ BOOL WINAPI DllMain(HINSTANCE inst, DWORD reason, LPVOID)
     GetModuleFileNameA(inst, g_dir, MAX_PATH);
     char* slash = strrchr(g_dir, '\\');
     if (slash) *slash = 0;
-    wsprintfA(g_logPath, "%s\\WlasniBohaterowie.log", g_dir);
+    wsprintfA(g_logPath, "%s\\HeroForge.log", g_dir);
 
-    Log("=== Wtyczka WlasniBohaterowie zaladowana ===");
+    Log("=== HeroForge loaded ===");
     for (int i = 0; i < 512; ++i) g_heroPicture[i] = -1;
     LoadConfig();
-    g_origSpellDamage = (SpellDamageFn)InstallHook(ADDR_SPELL_DAMAGE, PROLOGUE_SUB8, (void*)&SpellDamageHook, "obrazenia z czarow");
-    g_origHeroInit = (HeroInitFn)InstallHook(ADDR_HERO_INIT, PROLOGUE_SUBC, (void*)&HeroInitHook, "tworzenie bohatera");
-    g_origHeroMapSetup = (HeroMapSetupFn)InstallHook(ADDR_HERO_MAP_SETUP, PROLOGUE_SUB8, (void*)&HeroMapSetupHook, "bohater z edytora map");
+    g_origSpellDamage = (SpellDamageFn)InstallHook(ADDR_SPELL_DAMAGE, PROLOGUE_SUB8, (void*)&SpellDamageHook, "spell damage");
+    g_origHeroInit = (HeroInitFn)InstallHook(ADDR_HERO_INIT, PROLOGUE_SUBC, (void*)&HeroInitHook, "hero creation");
+    g_origHeroMapSetup = (HeroMapSetupFn)InstallHook(ADDR_HERO_MAP_SETUP, PROLOGUE_SUB8, (void*)&HeroMapSetupHook, "map editor hero");
     bool anyArmy = false;
     for (int i = 0; i < g_heroCount; ++i) if (g_heroes[i].armyCount > 0) anyArmy = true;
     if (anyArmy)
-        g_origArmyDraw = (ArmyDrawFn)InstallHook(ADDR_ARMY_DRAW, PROLOGUE_SUB8, (void*)&ArmyDrawHook, "armia startowa");
+        g_origArmyDraw = (ArmyDrawFn)InstallHook(ADDR_ARMY_DRAW, PROLOGUE_SUB8, (void*)&ArmyDrawHook, "starting army");
     InstallIconHook();
     for (int i = 0; i < g_heroCount; ++i)
         if (g_heroes[i].specFrom == SPEC_BUILT && g_heroes[i].buildType == BUILD_CREATURE_FIXED && g_heroes[i].crSpeed)
         {
-            g_origCreatureBonus = (CreatureBonusFn)InstallHook(ADDR_CREATURE_BONUS, PROLOGUE_SUB14, (void*)&CreatureBonusHook, "szybkosc stworow");
+            g_origCreatureBonus = (CreatureBonusFn)InstallHook(ADDR_CREATURE_BONUS, PROLOGUE_SUB14, (void*)&CreatureBonusHook, "creature speed");
             break;
         }
     LoadCustomPortraitList();
     if (g_customCount > 0)
     {
-        g_origPcx8 = (LoadPicFn)InstallHook(ADDR_LOAD_PCX8, PROLOGUE_SEH5, (void*)&LoadPcx8Hook, "wlasne portrety (8-bit)", 5);
-        g_origPcx16 = (LoadPicFn)InstallHook(0x55B1E0, PROLOGUE_PCX16, (void*)&LoadPcx16Hook, "wlasne portrety (16-bit)");
+        g_origPcx8 = (LoadPicFn)InstallHook(ADDR_LOAD_PCX8, PROLOGUE_SEH5, (void*)&LoadPcx8Hook, "custom portraits (8-bit)", 5);
+        g_origPcx16 = (LoadPicFn)InstallHook(0x55B1E0, PROLOGUE_PCX16, (void*)&LoadPcx16Hook, "custom portraits (16-bit)");
         if (!g_origPcx8 || !g_origPcx16) g_customCount = 0;  // hooks are a pair; without both, do nothing
     }
     CloseHandle(CreateThread(NULL, 0, SpecialtyThread, NULL, 0, NULL));

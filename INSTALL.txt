@@ -1,5 +1,5 @@
-HotA Custom Heroes - installation
-=================================
+HeroForge - installation
+========================
 
 Works ONLY with Heroes of Might and Magic III: Horn of the Abyss 1.8.0 (with HD Mod).
 For local games only (hot-seat / single player) - see README for details.
@@ -9,20 +9,23 @@ For local games only (hot-seat / single player) - see README for details.
 
 2. In the game folder copy, rename the original SMACKW32.DLL to smackw32_org.dll
    (keep it - the mod's SMACKW32.DLL passes everything through to it).
+   Updating an older version: smackw32_org.dll is already there, skip this step.
 
 3. Copy from this zip into the game folder:
-     SMACKW32.DLL
-     WlasniBohaterowie\   (whole folder)
+     SMACKW32.DLL   (replace the old one when updating)
+     HeroForge\     (whole folder)
 
 4. Start the game once and start a NEW game, so the mod writes the hero, specialty
-   and portrait data the editor uses (also when updating: the list gets new columns),
-   then close it.
-   (Updating from an older version: keep your WlasniBohaterowie\bohaterowie.ini - don't
-   overwrite it with the example one from this zip.)
+   and portrait data the editor uses, then close it.
 
-5. Run WlasniBohaterowie\Kreator.exe, set up your heroes, click Save, start the game.
+5. Run HeroForge\HeroForge.exe, set up your heroes, click Save, start the game.
 
-Log file: WlasniBohaterowie\WlasniBohaterowie.log
+Updating from 1.2.0 or older (the mod was called WlasniBohaterowie then):
+   Your heroes are not lost. The first time you open HeroForge.exe it imports
+   WlasniBohaterowie\bohaterowie.ini and your custom portraits; click Save.
+   Then the old WlasniBohaterowie folder can be deleted.
 
-Uninstall: delete SMACKW32.DLL and the WlasniBohaterowie folder,
+Log file: HeroForge\HeroForge.log
+
+Uninstall: delete SMACKW32.DLL and the HeroForge folder,
 then rename smackw32_org.dll back to SMACKW32.DLL.

@@ -1,6 +1,6 @@
-﻿// Kreator bohaterów - GUI editor for bohaterowie.ini (WlasniBohaterowie mod).
-// Lives next to the ini in the game's WlasniBohaterowie folder. Hero names come from
-// lista_bohaterow.txt, which the mod writes when a game is started.
+﻿// HeroForge editor - GUI for heroes.ini (HeroForge mod for HotA).
+// Lives next to the ini in the game's HeroForge folder. Hero names come from
+// game_heroes.txt, which the mod writes when a game is started.
 using System;
 using System.Collections.Generic;
 using System.Drawing;
@@ -9,7 +9,7 @@ using System.Linq;
 using System.Text;
 using System.Windows.Forms;
 
-namespace Kreator
+namespace HeroForge
 {
     class HeroEntry
     {
@@ -18,7 +18,7 @@ namespace Kreator
         public int Bonus;
         public List<KeyValuePair<int, int>> Skills = new List<KeyValuePair<int, int>>(); // skill id, level 1..3
         public HashSet<int> Spells = new HashSet<int>();
-        public bool SpellsSet;       // "czary" given: Spells replace the hero's own starting spell (empty = none)
+        public bool SpellsSet;       // "spells" given: Spells replace the hero's own starting spell (empty = none)
         public List<int[]> Army;     // starting army (creature, min, max), null = game default
         public int[] Stats;          // null = keep game defaults
         public int SpecMode;         // SpecOwn, SpecNone or SpecCopy
@@ -36,7 +36,7 @@ namespace Kreator
         public int BuildSpell = -1, BuildSkill = -1, BuildResource = -1;
         public int StartBook = -1;   // spell book at start: -1 game default, 1 yes, 0 no
 
-        // "ikona" key: absent = automatic, "wlasna" = own, skill key = skill icon, number = that hero's icon.
+        // "icon" key: absent = automatic, "own" = own, skill name = skill icon, number = that hero's icon.
         public int IconMode;
         public int IconSkill = 17;
         public int IconHero = -1;
@@ -45,13 +45,13 @@ namespace Kreator
 
     static class Data
     {
-        // Must match SKILL_NAMES in WlasniBohaterowie.cpp (ini keys) - same order as game ids.
+        // Must match SKILL_NAMES in HeroForge.cpp (names without spaces) - same order as game ids.
         public static readonly string[] SkillKeys = {
-            "znajomoscterenu", "lucznictwo", "logistyka", "zwiad", "dyplomacja", "nawigacja",
-            "dowodzenie", "madrosc", "mistycyzm", "szczescie", "balistyka", "sokoleoko",
-            "nekromancja", "zarzadzanie", "magiaognia", "magiapowietrza", "magiawody", "magiaziemi",
-            "uczonosc", "taktyka", "artyleria", "nauka", "atak", "obrona",
-            "inteligencja", "czarnoksiestwo", "odpornosc", "pierwszapomoc" };
+            "pathfinding", "archery", "logistics", "scouting", "diplomacy", "navigation",
+            "leadership", "wisdom", "mysticism", "luck", "ballistics", "eagleeye",
+            "necromancy", "estates", "firemagic", "airmagic", "watermagic", "earthmagic",
+            "scholar", "tactics", "artillery", "learning", "offense", "armorer",
+            "intelligence", "sorcery", "resistance", "firstaid" };
 
         // Display names as in the English game.
         public static readonly string[] SkillNames = {
@@ -280,7 +280,7 @@ namespace Kreator
             var old = picPortrait.Image;
             Bitmap img = null;
             // A custom portrait wins; then original heroes straight from the game files.
-            string custom = Path.Combine(dir, "portrety_wlasne", id + "_L.bmp");
+            string custom = Path.Combine(dir, "custom_portraits", id + "_L.bmp");
             if (id >= 0 && File.Exists(custom))
                 using (var fromFile = new Bitmap(custom)) img = new Bitmap(fromFile);
             else
@@ -288,7 +288,7 @@ namespace Kreator
             // exported from the running game (most of them; the rest have no preview).
             if (id >= 0 && heroPortraits.TryGetValue(id, out pcx))
                 img = GameImages.LoadPcx(pcx) ?? GameImages.LoadPcx(pcx + ".pcx");
-            string exported = Path.Combine(dir, "portrety", id + ".bmp");
+            string exported = Path.Combine(dir, "portraits", id + ".bmp");
             if (img == null && id >= 0 && File.Exists(exported))
                 using (var fromFile = new Bitmap(exported)) img = new Bitmap(fromFile);
             picPortrait.Image = img;
@@ -307,7 +307,7 @@ namespace Kreator
                 if (dlg.ShowDialog(this) != DialogResult.OK) return;
                 try
                 {
-                    string folder = Path.Combine(dir, "portrety_wlasne");
+                    string folder = Path.Combine(dir, "custom_portraits");
                     Directory.CreateDirectory(folder);
                     using (var src = new Bitmap(dlg.FileName))
                     {
@@ -322,7 +322,7 @@ namespace Kreator
                 }
             }
             UpdatePortrait(e.Id);
-            if (!File.Exists(Path.Combine(dir, "portrety_mapa.txt")))
+            if (!File.Exists(GameFile("portrait_map.txt", "portrety_mapa.txt")))
                 MessageBox.Show(this, "Saved. To show it in the game, start a NEW game once with the mod (it maps heroes to portrait files), then restart the game.",
                     "Custom portrait", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
@@ -333,7 +333,7 @@ namespace Kreator
             if (e == null || e.Id < 0) return;
             foreach (var size in new[] { "_L.bmp", "_S.bmp" })
             {
-                string f = Path.Combine(dir, "portrety_wlasne", e.Id + size);
+                string f = Path.Combine(dir, "custom_portraits", e.Id + size);
                 if (File.Exists(f)) File.Delete(f);
             }
             UpdatePortrait(e.Id);
@@ -409,7 +409,7 @@ namespace Kreator
             "+1 of the resource every day (Gold: +350).",
             "Like Sir Mullich: +2 Speed for all creatures in the hero's army." };
         static readonly string[] ResourceNames = { "Wood", "Mercury", "Ore", "Sulfur", "Crystal", "Gems", "Gold" };
-        static readonly string[] KindKeys = { "umiejetnosc", "stwor_poziom", "surowiec", "czar", "stwor", "szybkosc" }; // by game type
+        static readonly string[] KindKeys = { "skill", "creature_level", "resource", "spell", "creature", "speed" }; // by game type
         NumericUpDown[] numCreature = new NumericUpDown[4];   // attack, defense, damage, speed
         List<SpecItem> creatureItems = new List<SpecItem>();
         readonly Dictionary<int, int> upgradeToBase = new Dictionary<int, int>();
@@ -428,8 +428,8 @@ namespace Kreator
         public MainForm()
         {
             dir = AppDomain.CurrentDomain.BaseDirectory;
-            iniPath = Path.Combine(dir, "bohaterowie.ini");
-            Text = "Hero Creator - Custom Heroes (HotA)";
+            iniPath = Path.Combine(dir, "heroes.ini");
+            Text = "HeroForge - Hero Editor for HotA";
             Font = new Font("Segoe UI", 9f);
             ClientSize = new Size(910, 560);
             MinimumSize = new Size(926, 599);
@@ -443,6 +443,9 @@ namespace Kreator
             BuildUi();
             LoadIni();
             RefreshList(0);
+            if (importedFrom != null)
+                Shown += (s, e) => MessageBox.Show(this, "Your heroes were imported from the older version's file:\n" + importedFrom +
+                    "\n\nClick Save to store them in heroes.ini.", "Imported", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         // ---------- UI ----------
@@ -1021,7 +1024,7 @@ namespace Kreator
 
         void LoadHeroNames()
         {
-            string path = Path.Combine(dir, "lista_bohaterow.txt");
+            string path = GameFile("game_heroes.txt", "lista_bohaterow.txt");
             if (!File.Exists(path)) return;
             foreach (var line in File.ReadAllLines(path, Encoding.Default))
             {
@@ -1068,7 +1071,7 @@ namespace Kreator
 
             // "id;plural name;town;level;upgrade id". A creature and its upgrade share one entry
             // ("Jotunns / Jotunn Warlords"), keyed by the base creature, as the specialty covers both.
-            string crPath = Path.Combine(dir, "lista_stworow.txt");
+            string crPath = GameFile("game_creatures.txt", "lista_stworow.txt");
             if (File.Exists(crPath))
             {
                 var rows = new List<string[]>();
@@ -1127,7 +1130,7 @@ namespace Kreator
             }
 
             // "id;type;param;short text;description"
-            string specPath = Path.Combine(dir, "lista_specjalizacji.txt");
+            string specPath = GameFile("game_specialties.txt", "lista_specjalizacji.txt");
             if (!File.Exists(specPath)) return;
             foreach (var line in File.ReadAllLines(specPath, Encoding.Default))
             {
@@ -1137,18 +1140,90 @@ namespace Kreator
             }
         }
 
+        // Keys and values of the config before 1.3 (WlasniBohaterowie\bohaterowie.ini, Polish names),
+        // so an old file can be imported.
+        static readonly Dictionary<string, string> LegacyKeys = new Dictionary<string, string> {
+            { "imie", "name" }, { "szkola", "school" }, { "umiejetnosci", "skills" }, { "czary", "spells" },
+            { "statystyki", "stats" }, { "armia", "army" }, { "specjalizacja", "specialty" },
+            { "specjalizacja_typ", "specialty_type" }, { "stwor", "creature" }, { "stwor_atak", "creature_attack" },
+            { "stwor_obrona", "creature_defense" }, { "stwor_obrazenia", "creature_damage" }, { "stwor_szybkosc", "creature_speed" },
+            { "spec_czar", "specialty_spell" }, { "spec_umiejetnosc", "specialty_skill" }, { "spec_surowiec", "specialty_resource" },
+            { "ksiega", "spellbook" }, { "nazwa_specjalizacji", "specialty_name" }, { "opis_specjalizacji", "specialty_description" },
+            { "ikona", "icon" } };
+        static readonly Dictionary<string, string> LegacyValues = new Dictionary<string, string> {
+            { "brak", "none" }, { "wlasna", "own" }, { "tak", "yes" }, { "nie", "no" }, { "implozja", "18" },
+            { "umiejetnosc", "skill" }, { "stwor_poziom", "creature_level" }, { "surowiec", "resource" },
+            { "czar", "spell" }, { "stwor", "creature" }, { "szybkosc", "speed" } };
+        static readonly string[] LegacySkillKeys = {
+            "znajomoscterenu", "lucznictwo", "logistyka", "zwiad", "dyplomacja", "nawigacja",
+            "dowodzenie", "madrosc", "mistycyzm", "szczescie", "balistyka", "sokoleoko",
+            "nekromancja", "zarzadzanie", "magiaognia", "magiapowietrza", "magiawody", "magiaziemi",
+            "uczonosc", "taktyka", "artyleria", "nauka", "atak", "obrona",
+            "inteligencja", "czarnoksiestwo", "odpornosc", "pierwszapomoc" };
+        static readonly HashSet<string> KeysWithWords = new HashSet<string> { "specialty", "specialty_type", "spellbook", "icon", "spells" };
+
+        // Lower case without spaces and underscores, as the mod compares names.
+        static string Norm(string s) { return s.Trim().ToLowerInvariant().Replace(" ", "").Replace("_", ""); }
+
+        static int FindSkill(string name)
+        {
+            string n = Norm(name);
+            int i = Array.IndexOf(Data.SkillKeys, n);
+            return i >= 0 ? i : Array.IndexOf(LegacySkillKeys, n);
+        }
+
+        // A file the mod writes in the game: the current name, else the name an older version used
+        // (here or in the old WlasniBohaterowie folder) until the game has been started once.
+        string GameFile(string name, string legacy)
+        {
+            string current = Path.Combine(dir, name);
+            if (File.Exists(current)) return current;
+            foreach (var folder in new[] { dir, LegacyDir })
+            {
+                string old = Path.Combine(folder, legacy);
+                if (File.Exists(old)) return old;
+            }
+            return current;
+        }
+
+        string LegacyDir { get { return Path.Combine(Path.GetDirectoryName(dir.TrimEnd('\\')), "WlasniBohaterowie"); } }
+        string importedFrom;
+
         void LoadIni()
         {
-            if (!File.Exists(iniPath)) return;
+            string path = iniPath;
+            if (!File.Exists(path))
+            {
+                // First start after updating from an older version: import its config and portraits.
+                foreach (var old in new[] { Path.Combine(dir, "bohaterowie.ini"), Path.Combine(LegacyDir, "bohaterowie.ini") })
+                    if (File.Exists(old)) { path = importedFrom = old; break; }
+                if (importedFrom == null) return;
+                try
+                {
+                    string oldPortraits = Path.Combine(Path.GetDirectoryName(importedFrom), "portrety_wlasne");
+                    string newPortraits = Path.Combine(dir, "custom_portraits");
+                    if (Directory.Exists(oldPortraits))
+                    {
+                        Directory.CreateDirectory(newPortraits);
+                        foreach (var file in Directory.GetFiles(oldPortraits))
+                        {
+                            string target = Path.Combine(newPortraits, Path.GetFileName(file));
+                            if (!File.Exists(target)) File.Copy(file, target);
+                        }
+                    }
+                }
+                catch (IOException) { }
+            }
             HeroEntry cur = null;
             var specKey = new HashSet<HeroEntry>();
-            foreach (var raw in File.ReadAllLines(iniPath, Encoding.Default))
+            foreach (var raw in File.ReadAllLines(path, Encoding.Default))
             {
                 string line = raw.Trim();
                 if (line.Length == 0 || line.StartsWith(";")) continue;
                 if (line.StartsWith("["))
                 {
-                    cur = line.StartsWith("[Bohater", StringComparison.OrdinalIgnoreCase) ? new HeroEntry() : null;
+                    bool hero = line.StartsWith("[Hero", StringComparison.OrdinalIgnoreCase) || line.StartsWith("[Bohater", StringComparison.OrdinalIgnoreCase);
+                    cur = hero ? new HeroEntry() : null;
                     if (cur != null) entries.Add(cur);
                     continue;
                 }
@@ -1159,31 +1234,34 @@ namespace Kreator
                 string val = line.Substring(eq + 1).Trim();
                 int semi = val.IndexOf(';');
                 if (semi >= 0) val = val.Substring(0, semi).Trim();
+                string mapped;
+                if (LegacyKeys.TryGetValue(key, out mapped)) key = mapped;
+                if (KeysWithWords.Contains(key) && LegacyValues.TryGetValue(val.ToLowerInvariant(), out mapped)) val = mapped;
                 switch (key)
                 {
                     case "id": int.TryParse(val, out cur.Id); break;
                     case "bonus": int.TryParse(val, out cur.Bonus); break;
-                    case "szkola":
+                    case "school":
                         string v = val.ToLowerInvariant();
-                        if (v.Contains("ziemi")) cur.Schools |= 8;
-                        if (v.Contains("ogie") || v.Contains("ognia")) cur.Schools |= 2;
-                        if (v.Contains("wod")) cur.Schools |= 4;
-                        if (v.Contains("powietrz")) cur.Schools |= 1;
-                        if (v.Contains("wszystk")) cur.Schools |= 15;
+                        if (v.Contains("earth") || v.Contains("ziemi")) cur.Schools |= 8;
+                        if (v.Contains("fire") || v.Contains("ogie") || v.Contains("ognia")) cur.Schools |= 2;
+                        if (v.Contains("water") || v.Contains("wod")) cur.Schools |= 4;
+                        if (v.Contains("air") || v.Contains("powietrz")) cur.Schools |= 1;
+                        if (v.Contains("all") || v.Contains("wszystk")) cur.Schools |= 15;
                         break;
-                    case "umiejetnosci":
-                        foreach (var tok in val.Split(',', ';'))
+                    case "skills":
+                        foreach (var tok in val.Split(','))
                         {
                             var p = tok.Split(':');
-                            int skill = Array.IndexOf(Data.SkillKeys, p[0].Trim().ToLowerInvariant().Replace(" ", ""));
+                            int skill = FindSkill(p[0]);
                             int level = 3;
                             if (p.Length > 1) int.TryParse(p[1].Trim(), out level);
                             if (skill >= 0 && level >= 1 && level <= 3) cur.Skills.Add(new KeyValuePair<int, int>(skill, level));
                         }
                         break;
-                    case "armia":
+                    case "army":
                         cur.Army = new List<int[]>();
-                        foreach (var tok in val.Split(',', ';'))
+                        foreach (var tok in val.Split(','))
                         {
                             var m = System.Text.RegularExpressions.Regex.Match(tok, @"^\s*(\d+)\s*:\s*(\d+)\s*(?:-\s*(\d+))?\s*$");
                             if (!m.Success) continue;
@@ -1192,55 +1270,54 @@ namespace Kreator
                             if (lo > 0 && cur.Army.Count < ArmyRows) cur.Army.Add(new[] { c, lo, Math.Max(lo, hi) });
                         }
                         break;
-                    case "czary":
+                    case "spells":
                         cur.SpellsSet = true;
-                        foreach (var tok in val.Split(',', ';', ' '))
+                        foreach (var tok in val.Split(',', ' '))
                         {
                             string t = tok.Trim().ToLowerInvariant();
                             int spell;
-                            if (t == "implozja") cur.Spells.Add(18);
+                            if (t == "implosion" || t == "implozja") cur.Spells.Add(18);
                             else if (int.TryParse(t, out spell) && spell >= 0 && spell < 70) cur.Spells.Add(spell);
                         }
                         break;
-                    case "specjalizacja":
+                    case "specialty":
                         string sv = val.ToLowerInvariant();
                         int from;
-                        if (sv == "brak") cur.SpecMode = HeroEntry.SpecNone;
+                        if (sv == "none") cur.SpecMode = HeroEntry.SpecNone;
                         else if (int.TryParse(sv, out from)) { cur.SpecMode = HeroEntry.SpecCopy; cur.SpecFrom = from; }
                         else cur.SpecMode = HeroEntry.SpecOwn;
                         specKey.Add(cur);
                         break;
-                    case "ikona":
-                        string iv = val.ToLowerInvariant().Replace(" ", "");
+                    case "icon":
                         int iconHero;
-                        if (iv == "wlasna") cur.IconMode = HeroEntry.IconOwn;
-                        else if (int.TryParse(iv, out iconHero)) { cur.IconMode = HeroEntry.IconHeroMode; cur.IconHero = iconHero; }
-                        else if (Array.IndexOf(Data.SkillKeys, iv) >= 0) { cur.IconMode = HeroEntry.IconSkillMode; cur.IconSkill = Array.IndexOf(Data.SkillKeys, iv); }
+                        if (val.ToLowerInvariant() == "own") cur.IconMode = HeroEntry.IconOwn;
+                        else if (int.TryParse(val, out iconHero)) { cur.IconMode = HeroEntry.IconHeroMode; cur.IconHero = iconHero; }
+                        else if (FindSkill(val) >= 0) { cur.IconMode = HeroEntry.IconSkillMode; cur.IconSkill = FindSkill(val); }
                         break;
-                    case "imie": cur.Name = val; break;
-                    case "stwor": int.TryParse(val, out cur.Creature); cur.SpecMode = HeroEntry.SpecBuilt; specKey.Add(cur); break;
-                    case "specjalizacja_typ":
-                        int kindType = Array.IndexOf(KindKeys, val.ToLowerInvariant().Replace(" ", ""));
+                    case "name": cur.Name = val; break;
+                    case "creature": int.TryParse(val, out cur.Creature); cur.SpecMode = HeroEntry.SpecBuilt; specKey.Add(cur); break;
+                    case "specialty_type":
+                        int kindType = Array.FindIndex(KindKeys, k => Norm(k) == Norm(val));
                         if (kindType >= 0) { cur.BuildKind = kindType; cur.SpecMode = HeroEntry.SpecBuilt; specKey.Add(cur); }
                         break;
-                    case "spec_czar": int.TryParse(val, out cur.BuildSpell); break;
-                    case "spec_umiejetnosc": cur.BuildSkill = Array.IndexOf(Data.SkillKeys, val.ToLowerInvariant().Replace(" ", "")); break;
-                    case "spec_surowiec": int.TryParse(val, out cur.BuildResource); break;
-                    case "ksiega": cur.StartBook = val.ToLowerInvariant() == "tak" ? 1 : val.ToLowerInvariant() == "nie" ? 0 : -1; break;
-                    case "stwor_atak": int.TryParse(val, out cur.CreatureBonus[0]); break;
-                    case "stwor_obrona": int.TryParse(val, out cur.CreatureBonus[1]); break;
-                    case "stwor_obrazenia": int.TryParse(val, out cur.CreatureBonus[2]); break;
-                    case "stwor_szybkosc": int.TryParse(val, out cur.CreatureBonus[3]); break;
-                    case "nazwa_specjalizacji": cur.SpecName = val; break;
-                    case "opis_specjalizacji": cur.SpecDesc = val; break;
-                    case "statystyki":
+                    case "specialty_spell": int.TryParse(val, out cur.BuildSpell); break;
+                    case "specialty_skill": cur.BuildSkill = FindSkill(val); break;
+                    case "specialty_resource": int.TryParse(val, out cur.BuildResource); break;
+                    case "spellbook": cur.StartBook = val.ToLowerInvariant() == "yes" ? 1 : val.ToLowerInvariant() == "no" ? 0 : -1; break;
+                    case "creature_attack": int.TryParse(val, out cur.CreatureBonus[0]); break;
+                    case "creature_defense": int.TryParse(val, out cur.CreatureBonus[1]); break;
+                    case "creature_damage": int.TryParse(val, out cur.CreatureBonus[2]); break;
+                    case "creature_speed": int.TryParse(val, out cur.CreatureBonus[3]); break;
+                    case "specialty_name": cur.SpecName = val; break;
+                    case "specialty_description": cur.SpecDesc = val; break;
+                    case "stats":
                         var s = val.Split('/');
                         int[] st = new int[4];
                         if (s.Length == 4 && Enumerable.Range(0, 4).All(i => int.TryParse(s[i].Trim(), out st[i]))) cur.Stats = st;
                         break;
                 }
             }
-            // Same rule as the mod: a school bonus without a "specjalizacja" key replaces the own specialty.
+            // Same rule as the mod: a school bonus without a "specialty" key replaces the own specialty.
             foreach (var e in entries)
                 if (!specKey.Contains(e))
                     e.SpecMode = e.Schools != 0 && e.Bonus != 0 ? HeroEntry.SpecNone : HeroEntry.SpecOwn;
@@ -1287,88 +1364,88 @@ namespace Kreator
             }
 
             var sb = new StringBuilder();
-            sb.AppendLine("; Custom Heroes (WlasniBohaterowie) - configuration");
-            sb.AppendLine("; Written by the Hero Creator (Kreator.exe) - easiest to edit it there.");
+            sb.AppendLine("; HeroForge - hero configuration");
+            sb.AppendLine("; Written by the HeroForge editor (HeroForge.exe) - easiest to edit it there.");
             sb.AppendLine(";");
-            sb.AppendLine("; Keys: id, imie (new name, max 12), szkola (school: ziemia/ogien/woda/powietrze), bonus (%),");
-            sb.AppendLine(";   umiejetnosci (skill:level 1-3), czary (spell numbers, brak = no starting spell), statystyki (A/D/P/K),");
-            sb.AppendLine(";   armia (starting army: creature:count or creature:min-max, up to 7, comma separated),");
-            sb.AppendLine(";   specjalizacja (wlasna = own / brak = none / hero number to copy from),");
-            sb.AppendLine(";   specjalizacja_typ (stwor / stwor_poziom / czar / umiejetnosc / surowiec / szybkosc) with");
-            sb.AppendLine(";   stwor (creature number) + stwor_atak, stwor_obrona, stwor_obrazenia, stwor_szybkosc,");
-            sb.AppendLine(";   spec_czar (spell number), spec_umiejetnosc (skill), spec_surowiec (0-6, 6 = gold),");
-            sb.AppendLine(";   ksiega (tak / nie: spell book at start),");
-            sb.AppendLine(";   nazwa_specjalizacji, opis_specjalizacji (in-game specialty name and description),");
-            sb.AppendLine(";   ikona (wlasna = own / skill name = skill icon / hero number = that hero's icon; absent = automatic).");
+            sb.AppendLine("; Keys: id, name (new name, max 12), school (earth / fire / water / air), bonus (%),");
+            sb.AppendLine(";   skills (skill:level 1-3), spells (spell numbers, none = no starting spell), stats (A/D/P/K),");
+            sb.AppendLine(";   army (starting army: creature:count or creature:min-max, up to 7, comma separated),");
+            sb.AppendLine(";   specialty (own / none / hero number to copy from),");
+            sb.AppendLine(";   specialty_type (creature / creature_level / spell / skill / resource / speed) with");
+            sb.AppendLine(";   creature (creature number) + creature_attack, creature_defense, creature_damage, creature_speed,");
+            sb.AppendLine(";   specialty_spell (spell number), specialty_skill (skill), specialty_resource (0-6, 6 = gold),");
+            sb.AppendLine(";   spellbook (yes / no: spell book at start),");
+            sb.AppendLine(";   specialty_name, specialty_description (in-game specialty name and description),");
+            sb.AppendLine(";   icon (own / skill name = skill icon / hero number = that hero's icon; absent = automatic).");
             sb.AppendLine("; Changes take effect after restarting the game (skills/spells/stats: in a NEW game).");
             int n = 1;
             foreach (var e in entries)
             {
                 sb.AppendLine();
-                sb.AppendLine("[Bohater" + n++ + "]");
+                sb.AppendLine("[Hero" + n++ + "]");
                 string name;
                 if (heroNames.TryGetValue(e.Id, out name)) sb.AppendLine("; " + name);
                 sb.AppendLine("id = " + e.Id);
                 string newName = StripDiacritics(e.Name);
                 if (newName.Length > 12) newName = newName.Substring(0, 12);
-                if (newName.Length > 0) sb.AppendLine("imie = " + newName);
+                if (newName.Length > 0) sb.AppendLine("name = " + newName);
                 if (e.SpecMode == HeroEntry.SpecBuilt)
                 {
-                    sb.AppendLine("specjalizacja_typ = " + KindKeys[e.BuildKind]);
+                    sb.AppendLine("specialty_type = " + KindKeys[e.BuildKind]);
                     if (e.BuildKind == 4 || e.BuildKind == 1)
                     {
                         var cr = creatureItems.FirstOrDefault(i => i.Id == e.Creature);
-                        sb.AppendLine("stwor = " + e.Creature + (cr != null ? "   ; " + cr : ""));
+                        sb.AppendLine("creature = " + e.Creature + (cr != null ? "   ; " + cr : ""));
                     }
                     if (e.BuildKind == 4)
                     {
-                        string[] keys = { "stwor_atak", "stwor_obrona", "stwor_obrazenia", "stwor_szybkosc" };
+                        string[] keys = { "creature_attack", "creature_defense", "creature_damage", "creature_speed" };
                         for (int i = 0; i < 4; i++)
                             if (e.CreatureBonus[i] != 0) sb.AppendLine(keys[i] + " = " + e.CreatureBonus[i]);
                     }
                     if (e.BuildKind == 3)
-                        sb.AppendLine("spec_czar = " + e.BuildSpell + "   ; " + Data.SpellNames[e.BuildSpell]);
-                    if (e.BuildKind == 0) sb.AppendLine("spec_umiejetnosc = " + Data.SkillKeys[e.BuildSkill]);
+                        sb.AppendLine("specialty_spell = " + e.BuildSpell + "   ; " + Data.SpellNames[e.BuildSpell]);
+                    if (e.BuildKind == 0) sb.AppendLine("specialty_skill = " + Data.SkillNames[e.BuildSkill]);
                     if (e.BuildKind == 2)
-                        sb.AppendLine("spec_surowiec = " + e.BuildResource + "   ; " + ResourceNames[e.BuildResource]);
+                        sb.AppendLine("specialty_resource = " + e.BuildResource + "   ; " + ResourceNames[e.BuildResource]);
                 }
                 else if (e.SpecMode == HeroEntry.SpecCopy)
                 {
                     string src;
-                    sb.AppendLine("specjalizacja = " + e.SpecFrom + (heroNames.TryGetValue(e.SpecFrom, out src) ? "   ; like " + src : ""));
+                    sb.AppendLine("specialty = " + e.SpecFrom + (heroNames.TryGetValue(e.SpecFrom, out src) ? "   ; like " + src : ""));
                 }
-                else sb.AppendLine("specjalizacja = " + (e.SpecMode == HeroEntry.SpecNone ? "brak" : "wlasna"));
-                if (e.StartBook >= 0) sb.AppendLine("ksiega = " + (e.StartBook == 1 ? "tak" : "nie"));
+                else sb.AppendLine("specialty = " + (e.SpecMode == HeroEntry.SpecNone ? "none" : "own"));
+                if (e.StartBook >= 0) sb.AppendLine("spellbook = " + (e.StartBook == 1 ? "yes" : "no"));
                 string specName = StripDiacritics(e.SpecName), specDesc = StripDiacritics(e.SpecDesc);
-                if (specName.Length > 0) sb.AppendLine("nazwa_specjalizacji = " + specName);
-                if (specDesc.Length > 0) sb.AppendLine("opis_specjalizacji = " + specDesc);
-                if (e.IconMode == HeroEntry.IconOwn) sb.AppendLine("ikona = wlasna");
-                else if (e.IconMode == HeroEntry.IconSkillMode && e.IconSkill >= 0) sb.AppendLine("ikona = " + Data.SkillKeys[e.IconSkill]);
+                if (specName.Length > 0) sb.AppendLine("specialty_name = " + specName);
+                if (specDesc.Length > 0) sb.AppendLine("specialty_description = " + specDesc);
+                if (e.IconMode == HeroEntry.IconOwn) sb.AppendLine("icon = own");
+                else if (e.IconMode == HeroEntry.IconSkillMode && e.IconSkill >= 0) sb.AppendLine("icon = " + Data.SkillNames[e.IconSkill]);
                 else if (e.IconMode == HeroEntry.IconHeroMode && e.IconHero >= 0)
                 {
                     string iconSrc;
-                    sb.AppendLine("ikona = " + e.IconHero + (heroNames.TryGetValue(e.IconHero, out iconSrc) ? "   ; like " + iconSrc : ""));
+                    sb.AppendLine("icon = " + e.IconHero + (heroNames.TryGetValue(e.IconHero, out iconSrc) ? "   ; like " + iconSrc : ""));
                 }
                 if (e.Schools != 0 && e.Bonus != 0)
                 {
                     var schools = new List<string>();
-                    if ((e.Schools & 8) != 0) schools.Add("ziemia");
-                    if ((e.Schools & 2) != 0) schools.Add("ogien");
-                    if ((e.Schools & 4) != 0) schools.Add("woda");
-                    if ((e.Schools & 1) != 0) schools.Add("powietrze");
-                    sb.AppendLine("szkola = " + string.Join(" ", schools));
+                    if ((e.Schools & 8) != 0) schools.Add("earth");
+                    if ((e.Schools & 2) != 0) schools.Add("fire");
+                    if ((e.Schools & 4) != 0) schools.Add("water");
+                    if ((e.Schools & 1) != 0) schools.Add("air");
+                    sb.AppendLine("school = " + string.Join(" ", schools));
                     sb.AppendLine("bonus = " + e.Bonus);
                 }
                 if (e.Skills.Count > 0)
-                    sb.AppendLine("umiejetnosci = " + string.Join(", ", e.Skills.Select(k => Data.SkillKeys[k.Key] + ":" + k.Value)));
+                    sb.AppendLine("skills = " + string.Join(", ", e.Skills.Select(k => Data.SkillNames[k.Key] + ":" + k.Value)));
                 if (e.SpellsSet)
-                    sb.AppendLine("czary = " + (e.Spells.Count > 0 ? string.Join(", ", e.Spells.OrderBy(x => x)) +
-                        "   ; " + string.Join(", ", e.Spells.OrderBy(x => x).Select(x => Data.SpellNames[x])) : "brak"));
+                    sb.AppendLine("spells = " + (e.Spells.Count > 0 ? string.Join(", ", e.Spells.OrderBy(x => x)) +
+                        "   ; " + string.Join(", ", e.Spells.OrderBy(x => x).Select(x => Data.SpellNames[x])) : "none"));
                 if (e.Army != null && e.Army.Count > 0)
-                    sb.AppendLine("armia = " + string.Join(", ", e.Army.Select(a => a[0] + ":" + (a[1] == a[2] ? a[1].ToString() : a[1] + "-" + a[2]))) +
+                    sb.AppendLine("army = " + string.Join(", ", e.Army.Select(a => a[0] + ":" + (a[1] == a[2] ? a[1].ToString() : a[1] + "-" + a[2]))) +
                         "   ; " + string.Join(", ", e.Army.Select(a => CreatureLabel(a[0]))));
                 if (e.Stats != null)
-                    sb.AppendLine("statystyki = " + string.Join("/", e.Stats));
+                    sb.AppendLine("stats = " + string.Join("/", e.Stats));
             }
             try
             {
@@ -1385,7 +1462,7 @@ namespace Kreator
         [STAThread]
         static void Main(string[] args)
         {
-            // Test helper: Kreator.exe --dump-pcx <data dir> <name.pcx> <out.png>
+            // Test helper: HeroForge.exe --dump-pcx <data dir> <name.pcx> <out.png>
             if (args.Length == 4 && args[0] == "--dump-pcx")
             {
                 GameImages.Open(args[1]);

@@ -21,13 +21,14 @@ Example from `examples/heroes.ini`: Vehr (normally *+350 Gold*) becomes an **Ear
 - **Starting army**: up to 7 stacks, each with a count range (random in between). Previews show the first 3.
 - **Starting stats** (Attack/Defense/Power/Knowledge).
 - **Name** (up to 12 letters) and **portrait**: any image, cropped and scaled to the game's large (58x64) and small (48x32) portraits.
-- **HeroForge editor** (`HeroForge.exe`): edit all of the above without touching the ini file, in three tabs (Specialty, Skills & Spells, Army).
-  - town filter, and each hero listed with class and specialty,
-  - the hero's default stats, starting spell and army filled in,
+- **HeroForge editor** (`HeroForge.exe`): edit all of the above without touching the ini file. A dark editor with your heroes on the left (each with a one-line summary of its changes) and five sections: Specialty, Skills, Spells, Army, Stats.
+  - every picker searches as you type: a hero by name, class, town or specialty (`Bulwark`, `gold`), a specialty to copy (`interference`), a creature,
+  - spells with a search box and a filter by school of magic,
+  - only the fields that matter for your choices are shown, and the hero's default stats, starting spell and army are filled in,
   - a creature and its upgrade listed together for specialties ("Jotunns / Jotunn Warlords"),
-  - portrait preview (original heroes from the game files; most HotA heroes from portraits the mod exports while the game runs),
-
-  - search in the specialty and icon lists (for example `interference`).
+  - portrait preview (original heroes from the game files; most HotA heroes from portraits the mod exports while the game runs; initials for the rest),
+  - Ctrl+S saves, Ctrl+N adds a hero, Remove can be undone, and the editor warns about unsaved changes when you close it,
+  - sharp on scaled displays (125%, 150%, 200%).
 
 ## Requirements and limitations
 
@@ -80,10 +81,10 @@ Config file: `HeroForge\heroes.ini` (keys are listed at the top of the file; the
 Requires Visual Studio 2022 or Build Tools with the C++ x86 tools. .NET Framework 4 (included with Windows) builds the editor.
 
 ```powershell
-.\build.ps1 -Version 1.3.0
+.\build.ps1 -Version 1.4.0
 ```
 
-The output is `dist\HeroForge-1.3.0.zip`. `tools/ghidra` holds the small Ghidra scripts used to find the addresses.
+The output is `dist\HeroForge-1.4.0.zip`. `tools/ghidra` holds the small Ghidra scripts used to find the addresses.
 
 ## Disclaimer
 

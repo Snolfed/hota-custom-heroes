@@ -1,6 +1,6 @@
 # Builds HeroForge and packs a release zip into dist\.
 # Needs Visual Studio 2022 (or Build Tools) with the C++ x86 tools, and .NET Framework 4 (part of Windows).
-param([string]$Version = "1.3.0")
+param([string]$Version = "1.4.0")
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $out = Join-Path $root "dist\build"

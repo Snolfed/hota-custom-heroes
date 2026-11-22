@@ -81,10 +81,10 @@ Config file: `HeroForge\heroes.ini` (keys are listed at the top of the file; the
 Requires Visual Studio 2022 or Build Tools with the C++ x86 tools. .NET Framework 4 (included with Windows) builds the editor.
 
 ```powershell
-.\build.ps1 -Version 1.4.0
+.\build.ps1 -Version 1.4.1
 ```
 
-The output is `dist\HeroForge-1.4.0.zip`. `tools/ghidra` holds the small Ghidra scripts used to find the addresses.
+The output is `dist\HeroForge-1.4.1.zip`. `tools/ghidra` holds the small Ghidra scripts used to find the addresses.
 
 ## Disclaimer
 

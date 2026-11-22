@@ -1,6 +1,6 @@
 # Builds HeroForge and packs a release zip into dist\.
 # Needs Visual Studio 2022 (or Build Tools) with the C++ x86 tools, and .NET Framework 4 (part of Windows).
-param([string]$Version = "1.4.0")
+param([string]$Version = "1.4.1")
 $ErrorActionPreference = "Stop"
 $root = $PSScriptRoot
 $out = Join-Path $root "dist\build"
@@ -25,6 +25,12 @@ Invoke-Cl $out "smackw32_proxy.cpp /Fe:SMACKW32.DLL kernel32.lib"
 $csc = "$env:WINDIR\Microsoft.NET\Framework\v4.0.30319\csc.exe"
 & $csc /nologo /codepage:65001 /target:winexe /win32icon:"$root\assets\HeroForge.ico" /out:"$out\HeroForge.exe" /r:System.Windows.Forms.dll /r:System.Drawing.dll /r:System.Core.dll /r:System.dll "$root\src\Editor\HeroForgeEditor.cs"
 if ($LASTEXITCODE -ne 0) { throw "csc failed" }
+
+# The editor must save the example exactly as it loaded it.
+$test = Join-Path $root "dist\roundtrip"
+$p = Start-Process "$out\HeroForge.exe" -ArgumentList "--roundtrip", "`"$root\examples\heroes.ini`"", "`"$test`"" -Wait -PassThru
+if ($p.ExitCode -ne 0) { throw "Editor round-trip test failed, see $test\roundtrip.txt" }
+Write-Host "Editor round-trip test passed"
 
 Copy-Item "$out\SMACKW32.DLL" $pkg
 Copy-Item "$out\HeroForge.dll", "$out\HeroForge.exe", "$root\examples\heroes.ini" "$pkg\HeroForge"

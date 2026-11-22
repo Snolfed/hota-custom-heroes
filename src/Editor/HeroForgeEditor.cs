@@ -385,7 +385,7 @@ namespace HeroForge
         {
             public readonly int Town; // -1 = all
             public TownItem(int town) { Town = town; }
-            public override string ToString() { return Town < 0 ? "(all towns)" : TownName(Town); }
+            public override string ToString() { return Town < 0 ? "All towns" : TownName(Town); }
         }
         readonly List<HeroEntry> entries = new List<HeroEntry>();
         bool loading;
@@ -429,9 +429,10 @@ namespace HeroForge
 
         public MainForm()
         {
-            dir = AppDomain.CurrentDomain.BaseDirectory;
+            dir = TestDir ?? AppDomain.CurrentDomain.BaseDirectory;
             iniPath = Path.Combine(dir, "heroes.ini");
             Text = "HeroForge - Hero Editor for HotA";
+            Icon = System.Drawing.Icon.ExtractAssociatedIcon(Application.ExecutablePath);
             StartPosition = FormStartPosition.CenterScreen;
             using (var screen = Graphics.FromHwnd(IntPtr.Zero)) Ui = screen.DpiX / 96f * TestScale;
 
@@ -511,6 +512,8 @@ namespace HeroForge
         // scaled by WinForms (AutoScaleMode.Dpi); sizes used later in code go through S().
         static float Ui = 1f;
         static float TestScale = 1f;  // --scale test helper: pretend a scaled display
+        static string TestDir;        // --roundtrip test helper: work in this folder instead of the exe's
+        const int MaxHeroes = 256;    // the mod reads sections [Hero1]..[Hero256]
         static int S(int px) { return (int)Math.Round(px * Ui); }
 
         [System.Runtime.InteropServices.DllImport("dwmapi.dll")]
@@ -679,7 +682,29 @@ namespace HeroForge
         string savedNote = "", nameCue = "";
         Control errorControl;
         Color errorControlBack;
-        readonly List<SpecItem> heroItems = new List<SpecItem>();
+        readonly List<SpecItem> heroAll = new List<SpecItem>();   // every hero
+        readonly List<SpecItem> heroItems = new List<SpecItem>(); // the ones in the chosen town (the picker's list)
+        ComboBox cboTown;
+
+        // Shows only the chosen town's heroes in the Hero picker; the entry's hero stays as it is.
+        void FilterHeroesByTown(bool openList)
+        {
+            int town = cboTown.SelectedItem != null ? ((TownItem)cboTown.SelectedItem).Town : -1;
+            heroItems.Clear();
+            heroItems.AddRange(heroAll.Where(h => { int t; return town < 0 || (heroTowns.TryGetValue(h.Id, out t) && t == town); }));
+            bool wasLoading = loading;
+            loading = true;
+            int id = Current != null ? Current.Id : -1;
+            SelectSearchable(cboHero, id, heroItems);
+            if (cboHero.SelectedIndex < 0 && id >= 0)
+            {
+                var cur = heroAll.FirstOrDefault(h => h.Id == id);
+                cboHero.Text = cur != null ? cur.ToString() : id.ToString();
+            }
+            cboHero.SelectionLength = 0;
+            loading = wasLoading;
+            if (openList && heroItems.Count > 0) { cboHero.Focus(); cboHero.DroppedDown = true; }
+        }
 
         [System.Runtime.InteropServices.DllImport("user32.dll")]
         static extern bool SetProcessDPIAware();
@@ -785,10 +810,19 @@ namespace HeroForge
                 if (heroTowns.TryGetValue(kv.Key, out town)) about.Add(TownName(town));
                 string where = string.Join(", ", about);
                 if (specTexts.TryGetValue(kv.Key, out spec) && spec.Length > 0) where += (where.Length > 0 ? " - " : "") + spec;
-                heroItems.Add(new SpecItem(kv.Key, kv.Value, where));
+                heroAll.Add(new SpecItem(kv.Key, kv.Value, where));
             }
-            Caption(card, "Hero", 150, 68);
-            cboHero = new ComboBox { Location = new Point(150, 86), Width = 404, MaxDropDownItems = 20 };
+            heroItems.AddRange(heroAll);
+            // Town first narrows the hero list (the search still works inside it).
+            Caption(card, "Town", 150, 68);
+            cboTown = new ComboBox { Location = new Point(150, 86), Width = 132, DropDownStyle = ComboBoxStyle.DropDownList, MaxDropDownItems = 20 };
+            cboTown.Items.Add(new TownItem(-1));
+            foreach (int townId in heroTowns.Values.Where(x => x >= 0).Distinct().OrderBy(x => x)) cboTown.Items.Add(new TownItem(townId));
+            cboTown.SelectedIndex = 0;
+            cboTown.SelectedIndexChanged += (s, e) => { if (!loading) FilterHeroesByTown(true); };
+            card.Controls.Add(cboTown);
+            Caption(card, "Hero", 292, 68);
+            cboHero = new ComboBox { Location = new Point(292, 86), Width = 262, DropDownWidth = 420, MaxDropDownItems = 20 };
             MakeSearchable(cboHero, heroItems);
             cboHero.SelectedIndexChanged += (s, e) => OnEdit();
             cboHero.TextChanged += (s, e) => OnEdit();
@@ -1281,7 +1315,6 @@ namespace HeroForge
             {
                 // Back to the default: show the hero's own army again (read only).
                 if (!loading && !chkArmy.Checked && Current != null) ShowArmy(DefaultArmy(Current.Id));
-                UpdateArmyEnabled();
                 OnEdit();
             };
             r.Controls.Add(chkArmy);
@@ -1317,7 +1350,6 @@ namespace HeroForge
             lblArmyDefault.AutoSize = false;
             lblArmyDefault.Size = new Size(ContentWidth, 50);
             r.Controls.Add(lblArmyDefault);
-            UpdateArmyEnabled();
         }
 
         void BuildStatsSection(Panel section)
@@ -1325,7 +1357,7 @@ namespace HeroForge
             var f = Stack(section, "Starting stats", "Attack, Defense, Power and Knowledge at level 1.");
             var r = Row(f, 24);
             chkStats = new CheckBox { Text = "Custom stats (otherwise the hero's defaults)", Location = new Point(0, 2), AutoSize = true };
-            chkStats.CheckedChanged += (s, e) => { foreach (var n in numStats) n.Enabled = chkStats.Checked; OnEdit(); };
+            chkStats.CheckedChanged += (s, e) => OnEdit();
             r.Controls.Add(chkStats);
             r = Row(f, 22, 24);
             lblStatsDefault = Lbl("", T.Body, T.Text2);
@@ -1338,7 +1370,7 @@ namespace HeroForge
             for (int i = 0; i < 4; i++)
             {
                 Caption(r, statNames[i], i * 100, 0);
-                numStats[i] = new NumericUpDown { Location = new Point(i * 100, 20), Width = 80, Minimum = i < 2 ? 0 : 1, Maximum = 99, Value = i < 2 ? 0 : 1, Enabled = false };
+                numStats[i] = new NumericUpDown { Location = new Point(i * 100, 20), Width = 80, Minimum = i < 2 ? 0 : 1, Maximum = 99, Value = i < 2 ? 0 : 1 };
                 numStats[i].ValueChanged += (s, e) => OnEdit();
                 r.Controls.Add(numStats[i]);
             }
@@ -1536,7 +1568,7 @@ namespace HeroForge
             {
                 case 0:
                     string spec = "";
-                    if (e.SpecMode == HeroEntry.SpecCopy) spec = "Like " + (e.SpecFrom >= 0 ? HeroLabelShort(e.SpecFrom) : "…");
+                    if (e.SpecMode == HeroEntry.SpecCopy) spec = "Like " + (e.SpecFrom >= 0 ? HeroName(e.SpecFrom) : "…");
                     else if (e.SpecMode == HeroEntry.SpecNone) spec = "None";
                     else if (e.SpecMode == HeroEntry.SpecBuilt) spec = BuiltLabel(e);
                     else { string own; spec = specTexts.TryGetValue(e.Id, out own) ? own : "Original"; }
@@ -1593,20 +1625,6 @@ namespace HeroForge
             if ((schools & 4) != 0) names.Add("Water");
             if ((schools & 1) != 0) names.Add("Air");
             return string.Join("/", names) + " Magic";
-        }
-
-        string HeroLabelShort(int id)
-        {
-            string name;
-            return heroNames.TryGetValue(id, out name) ? name : id.ToString();
-        }
-
-        List<int[]> ArmyFromRows()
-        {
-            var army = new List<int[]>();
-            for (int i = 0; i < ArmyRows; i++)
-                if (armyPick[i] >= 0) army.Add(new[] { armyPick[i], (int)numArmyMin[i].Value, (int)numArmyMax[i].Value });
-            return army;
         }
 
         // Unsaved = the entries differ from what was loaded or last saved.
@@ -1688,6 +1706,15 @@ namespace HeroForge
             var e = Current;
             if (e == null || loading) return;
             loading = true;
+            // A town is chosen but this hero is from another one: switch the filter to the hero's town.
+            int heroTown;
+            if (e.Id >= 0 && ((TownItem)cboTown.SelectedItem).Town >= 0 && heroTowns.TryGetValue(e.Id, out heroTown) &&
+                heroTown != ((TownItem)cboTown.SelectedItem).Town)
+            {
+                for (int i = 0; i < cboTown.Items.Count; i++)
+                    if (((TownItem)cboTown.Items[i]).Town == heroTown) cboTown.SelectedIndex = i;
+                FilterHeroesByTown(false);
+            }
             SelectSearchable(cboHero, e.Id, heroItems);
             if (e.Id >= 0 && cboHero.SelectedIndex < 0) cboHero.Text = e.Id.ToString(); // no hero list yet
             cboHero.SelectionLength = 0;
@@ -1733,11 +1760,8 @@ namespace HeroForge
             UpdateSpellDefaultLabel(e.Id);
             chkArmy.Checked = e.Army != null;
             ShowArmy(e.Army ?? DefaultArmy(e.Id));
-            UpdateArmyEnabled();
             UpdateArmyDefaultLabel(e.Id);
-            // Without custom stats the boxes show the hero's defaults (read only).
             chkStats.Checked = e.Stats != null;
-            for (int i = 0; i < 4; i++) numStats[i].Enabled = e.Stats != null;
             ShowStats(e.Stats ?? DefaultStats(e.Id));
             loading = false;
             UpdateVisibility();
@@ -1888,12 +1912,6 @@ namespace HeroForge
                 numArmyMax[i].Value = has ? Math.Max(1, Math.Min(9999, army[i][2])) : 1;
             }
             loading = wasLoading;
-        }
-
-        void UpdateArmyEnabled()
-        {
-            for (int i = 0; i < ArmyRows; i++)
-                cboArmy[i].Enabled = numArmyMin[i].Enabled = numArmyMax[i].Enabled = chkArmy.Checked;
         }
 
         void UpdateArmyDefaultLabel(int id)
@@ -2285,6 +2303,11 @@ namespace HeroForge
                 ShowError(noSource, 0, cboSpecFrom, "Not saved: pick the hero whose specialty " + HeroName(noSource.Id) + " should copy.");
                 return false;
             }
+            if (entries.Count > MaxHeroes)
+            {
+                ShowError(entries[MaxHeroes], -1, cboHero, "Not saved: the game reads at most " + MaxHeroes + " heroes. Remove " + (entries.Count - MaxHeroes) + " of them.");
+                return false;
+            }
 
             var sb = new StringBuilder();
             sb.AppendLine("; HeroForge - hero configuration");
@@ -2390,7 +2413,6 @@ namespace HeroForge
             return true;
         }
 
-        [STAThread]
         void TestState(string state)
         {
             switch (state)
@@ -2407,6 +2429,8 @@ namespace HeroForge
             }
         }
 
+        // STA is required by the file dialogs (Custom portrait...); without it they hang.
+        [STAThread]
         static void Main(string[] args)
         {
             // Test helper: HeroForge.exe --dump-pcx <data dir> <name.pcx> <out.png>
@@ -2470,6 +2494,30 @@ namespace HeroForge
                 form.dirty = false;
                 form.Close();
                 return;
+            }
+            // Test (run by build.ps1): HeroForge.exe --roundtrip <heroes.ini> <empty work dir>
+            // loads the file, shows every entry in the editor, saves, loads again and checks that
+            // nothing changed. Exit code 0 = same, 1 = different (details in roundtrip.txt).
+            if (args.Length == 3 && args[0] == "--roundtrip")
+            {
+                TestDir = Path.GetFullPath(args[2]).TrimEnd('\\') + "\\";
+                Directory.CreateDirectory(TestDir);
+                File.Copy(args[1], Path.Combine(TestDir, "heroes.ini"), true);
+                var first = new MainForm { StartPosition = FormStartPosition.Manual, Location = new Point(-4000, 0), ShowInTaskbar = false };
+                first.Show();
+                Application.DoEvents();
+                string before = first.Snapshot();
+                for (int i = 0; i < first.entries.Count; i++) first.lstEntries.SelectedIndex = i;
+                bool saved = first.SaveIni();
+                first.dirty = false;
+                first.Close();
+                var second = new MainForm { StartPosition = FormStartPosition.Manual, Location = new Point(-4000, 0), ShowInTaskbar = false };
+                string after = second.Snapshot();
+                second.Close();
+                bool same = saved && first.entries.Count > 0 && before == after;
+                File.WriteAllText(Path.Combine(TestDir, "roundtrip.txt"), (same ? "OK" : "DIFFERENT (saved: " + saved + ")") +
+                    "\r\n\r\nloaded:\r\n" + before + "\r\n\r\nafter save:\r\n" + after + "\r\n");
+                Environment.Exit(same ? 0 : 1);
             }
             Application.Run(new MainForm());
         }

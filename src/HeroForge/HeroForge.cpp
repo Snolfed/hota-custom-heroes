@@ -57,6 +57,7 @@ static const int   STATS_SPEED = 0x50;
 static const DWORD ADDR_CREATURE_UPGRADE = 0x47AAD0; // int __fastcall (creature) -> upgraded creature or -1
 static const DWORD ADDR_CREATURES_PTR = 0x6747B0;    // -> creature table, 0x74 bytes per creature
 static const int   CREATURE_SIZE = 0x74;
+static const int   CREATURE_COUNT = 200;            // HotA 1.8.0: ids 0..199
 static const int   CREATURE_TOWN = 0x00, CREATURE_LEVEL = 0x04;
 static const int   CREATURE_NAME_PLURAL = 0x18;     // char*
 // Picture controls in dialogs (class vtable 0x63EC48): vtable[4] draws `def` frame `frame`
@@ -146,7 +147,7 @@ static const int SPEC_BUILT = -3;  // specialty built from "specialty_type" (+ i
 enum { BUILD_SKILL = 0, BUILD_CREATURE_LEVEL = 1, BUILD_RESOURCE = 2, BUILD_SPELL = 3,
        BUILD_CREATURE_FIXED = 4, BUILD_SPEED = 5 };
 
-static const int MAX_HEROES = 64;
+static const int MAX_HEROES = 256;   // sections [Hero1]..[Hero256]; the editor refuses to save more
 static HeroConfig g_heroes[MAX_HEROES];
 static int g_heroCount = 0;
 static char g_dir[MAX_PATH];
@@ -293,7 +294,7 @@ static void ParseArmy(const char* section, const char* text, HeroConfig& h)
         int creature, lo, hi;
         int n = sscanf(tok, " %d : %d - %d", &creature, &lo, &hi);
         if (n == 2) hi = lo;
-        if (n < 2 || creature < 0 || creature >= 1000 || lo < 1 || hi < lo || hi > 9999)
+        if (n < 2 || creature < 0 || creature >= CREATURE_COUNT || lo < 1 || hi < lo || hi > 9999)
         {
             Log("[%s] bad army stack: '%s' (use creature:count or creature:min-max)", section, tok);
             continue;
@@ -394,9 +395,14 @@ static void LoadConfig()
         else if (strcmp(kind, "resource") == 0) { h.buildType = BUILD_RESOURCE; h.buildParam = GetPrivateProfileIntA(section, "specialty_resource", -1, ini); }
         else if (strcmp(kind, "speed") == 0) { h.buildType = BUILD_SPEED; h.buildParam = 2; }
         else if (creature >= 0) { h.buildType = BUILD_CREATURE_FIXED; h.buildParam = creature; }
-        if (h.buildType >= 0 && h.buildParam < 0)
+        // A number outside the game's tables would make the mod read past them later.
+        int paramLimit = h.buildType == BUILD_SPELL ? SPELL_COUNT
+                       : h.buildType == BUILD_RESOURCE ? 7
+                       : h.buildType == BUILD_CREATURE_FIXED || h.buildType == BUILD_CREATURE_LEVEL ? CREATURE_COUNT
+                       : 0x7FFFFFFF;
+        if (h.buildType >= 0 && (h.buildParam < 0 || h.buildParam >= paramLimit))
         {
-            Log("[%s] specialty '%s' without its parameter - skipped", section, kind);
+            Log("[%s] specialty '%s' without a valid parameter (%d) - skipped", section, kind, h.buildParam);
             h.buildType = -1;
         }
         if (h.buildType >= 0) h.specFrom = SPEC_BUILT;
